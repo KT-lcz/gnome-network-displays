@@ -42,6 +42,8 @@ enum {
 
   PROP_DISPLAY_NAME,
   PROP_MATCHES,
+  PROP_HW_ADDRESS,
+  PROP_STRENGTH,
   PROP_PRIORITY,
   PROP_STATE,
   PROP_MISSING_VIDEO_CODEC,
@@ -135,6 +137,8 @@ nd_dummy_wfd_sink_class_init (NdDummyWFDSinkClass *klass)
 
   g_object_class_override_property (object_class, PROP_DISPLAY_NAME, "display-name");
   g_object_class_override_property (object_class, PROP_MATCHES, "matches");
+  g_object_class_override_property (object_class, PROP_HW_ADDRESS, "hw-address");
+  g_object_class_override_property (object_class, PROP_STRENGTH, "strength");
   g_object_class_override_property (object_class, PROP_PRIORITY, "priority");
   g_object_class_override_property (object_class, PROP_STATE, "state");
   g_object_class_override_property (object_class, PROP_MISSING_VIDEO_CODEC, "missing-video-codec");

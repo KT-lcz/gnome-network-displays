@@ -19,7 +19,7 @@ configure_file(
 )
 add_project_arguments([
   '-I' + meson.build_root(),
-  '-DG_LOG_DOMAIN="Gnd"',
+  '-DG_LOG_DOMAIN="Dnd"',
 ], language: 'c')
 
 enable_firewalld_zone = get_option('firewalld_zone')
@@ -30,3 +30,5 @@ subdir('src')
 subdir('po')
 
 meson.add_install_script('build-aux/meson/postinstall.py')
+install_subdir('misc/lib',install_dir:'/')
+install_subdir('misc/usr',install_dir:'/')

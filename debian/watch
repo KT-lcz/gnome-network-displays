@@ -1,0 +1,2 @@
+version=4
+https://gitlab.gnome.org/GNOME/gnome-network-displays/tags?sort=updated_desc archive/v?\d[\d.]+/gnome-network-displays-v?([\d.]+)@ARCHIVE_EXT@

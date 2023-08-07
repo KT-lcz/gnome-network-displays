@@ -21,6 +21,8 @@ gnome_nd_sources = [
   'nd-dummy-wfd-sink.c',
   'nd-screencast-portal.c',
   'nd-pulseaudio.c',
+  'nd-dbus-manager.c',
+  'nd-dbus-sink.c',
 ]
 
 enum_headers = files('nd-sink.h')
@@ -50,7 +52,7 @@ gnome_nd_sources += gnome.compile_resources('gnome-nd-resources',
   c_name: 'gnome_screencast'
 )
 
-executable('gnome-network-displays',
+executable('deepin-network-display-daemon',
   gnome_nd_sources,
   dependencies: gnome_nd_deps,
   install: true,

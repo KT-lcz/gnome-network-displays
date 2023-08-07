@@ -1,0 +1,23 @@
+gnome-network-displays (0.90.5-4) unstable; urgency=medium
+
+  * deepin network display init;
+
+ -- lichangze <lichangze@uniontech.com>  Mon, 07 Aug 2023 16:50:24 +0800
+
+gnome-network-displays (0.90.5-3) unstable; urgency=medium
+
+  * Fixed wrong VCS fields in d/control
+
+ -- Matthias Geiger <matthias.geiger1024@tutanota.de>  Mon, 03 Oct 2022 16:13:11 -0700
+
+gnome-network-displays (0.90.5-2) unstable; urgency=medium
+
+  * Rebuild after NEW acceptance
+
+ -- Jeremy Bicha <jbicha@ubuntu.com>  Sun, 25 Sep 2022 14:17:33 -0400
+
+gnome-network-displays (0.90.5-1) unstable; urgency=medium
+
+  * Initial release. (Closes: #995899)
+
+ -- Matthias Geiger <matthias.geiger1024@tutanota.de>  Thu, 01 Sep 2022 21:48:51 -0400

@@ -81,6 +81,7 @@ nd_provider_default_init (NdProviderIface *iface)
 GList *
 nd_provider_get_sinks (NdProvider *provider)
 {
+  // provider 为 p2p provider
   NdProviderIface *iface = ND_PROVIDER_GET_IFACE (provider);
 
   return iface->get_sinks (provider);

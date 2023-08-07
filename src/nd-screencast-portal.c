@@ -227,6 +227,7 @@ portal_select_source_response_received (GDBusConnection *connection,
                      self->cancellable,
                      init_check_dbus_error,
                      task);
+  g_warning ("g_dbus_proxy_call start");
 }
 
 static void
@@ -270,7 +271,7 @@ portal_create_session_response_received (GDBusConnection *connection,
   g_debug ("simple variant lookup: %s", self->session_handle);
 
   handle = get_portal_request_path (g_dbus_proxy_get_connection (self->screencast), &token);
-
+  g_debug ("portal request path: %s", handle);
   self->portal_signal_id = g_dbus_connection_signal_subscribe (g_dbus_proxy_get_connection (self->screencast),
                                                                "org.freedesktop.portal.Desktop",
                                                                "org.freedesktop.portal.Request",
@@ -286,7 +287,7 @@ portal_create_session_response_received (GDBusConnection *connection,
 
   g_variant_builder_open (&builder, G_VARIANT_TYPE_VARDICT);
   g_variant_builder_add (&builder, "{sv}", "handle_token", g_variant_new_string (token));
-  g_variant_builder_add (&builder, "{sv}", "types", g_variant_new_uint32 (0x5));
+  g_variant_builder_add (&builder, "{sv}", "types", g_variant_new_uint32 (0x1));
   g_variant_builder_close (&builder);
 
   g_dbus_proxy_call (self->screencast,
@@ -297,6 +298,7 @@ portal_create_session_response_received (GDBusConnection *connection,
                      self->cancellable,
                      init_check_dbus_error,
                      task);
+  g_warning ("g_dbus_proxy_call SelectSources");
 }
 
 static void
@@ -361,6 +363,7 @@ on_portal_nd_proxy_acquired (GObject      *source_object,
                      self->cancellable,
                      init_check_dbus_error,
                      task);
+  g_warning ("g_dbus_proxy_call CreateSession");
 }
 
 static void

@@ -43,6 +43,21 @@ sink_added_cb (NdSinkList *sink_list,
                NdSink     *sink,
                NdProvider *provider)
 {
+  /*
+   g_autofree gchar *display_name = NULL;
+g_object_get (sink, "display-name", &display_name, NULL);
+g_info ("SinkList: xxxxxxxxxxxx   Adding a sink name : %s",display_name);
+
+
+g_autoptr(GPtrArray) sink_matches = NULL;
+g_object_get (sink, "matches", &sink_matches, NULL);
+
+for (gint j = 0; j < sink_matches->len; j++){
+   gchar* mac = g_ptr_array_index(sink_matches,j);
+   g_debug ("SinkList: xxxxxxxxxxxx   Adding a sink mac: %s",mac);
+}
+   */
+
   NdSinkRow *sink_row;
 
   g_debug ("SinkList: Adding a sink");
@@ -168,6 +183,7 @@ void
 nd_sink_list_set_provider (NdSinkList *sink_list,
                            NdProvider *provider)
 {
+  // provider 是 meta provider
   if (sink_list->provider)
     {
       g_signal_handlers_disconnect_by_data (sink_list->provider, sink_list);

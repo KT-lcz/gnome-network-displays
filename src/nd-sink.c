@@ -54,6 +54,21 @@ nd_sink_default_init (NdSinkIface *iface)
                                                            G_TYPE_PTR_ARRAY,
                                                            G_PARAM_READABLE | G_PARAM_STATIC_STRINGS));
 
+  g_object_interface_install_property(iface,
+                                      g_param_spec_string ("hw-address",
+                                                          "hardware address",
+                                                          "xxx",
+                                                          NULL,
+                                                          G_PARAM_READABLE | G_PARAM_STATIC_STRINGS));
+  g_object_interface_install_property(iface,
+                                      g_param_spec_int ("strength",
+                                                           "sink strength",
+                                                           "xxx",
+                                                           G_MININT,
+                                                           100,
+                                                           0,
+                                                           G_PARAM_READABLE | G_PARAM_STATIC_STRINGS));
+
   g_object_interface_install_property (iface,
                                        g_param_spec_int ("priority",
                                                          "Sink Priority",

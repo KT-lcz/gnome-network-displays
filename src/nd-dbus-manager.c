@@ -201,6 +201,12 @@ nd_dbus_screencast_portal_init_async_cb (GObject *source_object,
 
   self = ND_DBUS_MANAGER (user_data);
   self->portal = ND_SCREENCAST_PORTAL (source_object);
+  // portal异步初始化,需要给所有sink设置portal
+  for (gint i = 0; i < self->sink_list->len; i++)
+    {
+      NdDbusSink *sink = (NdDbusSink *) self->sink_list->pdata[i];
+      g_object_set (sink, "portal", self->portal, NULL);
+    }
 }
 
 static void

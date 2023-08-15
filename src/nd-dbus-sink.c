@@ -235,12 +235,6 @@ nd_dbus_sink_class_init (NdDbusSinkClass *klass)
       "The sink provider (usually a MetaProvider) that finds the available sinks.",
       ND_TYPE_PROVIDER,
       G_PARAM_CONSTRUCT_ONLY | G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS);
-  props[PROP_PORTAL] = g_param_spec_object (
-      "portal",
-      "xdg desktop portal",
-      "xdg desktop portal that provide screencast",
-      ND_TYPE_SCREENCAST_PORTAL,
-      G_PARAM_CONSTRUCT_ONLY | G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS),
 
   props[PROP_PULSE] = g_param_spec_object (
       "pulse",
@@ -269,6 +263,14 @@ nd_dbus_sink_class_init (NdDbusSinkClass *klass)
       "dbus connection",
       G_TYPE_DBUS_CONNECTION,
       G_PARAM_CONSTRUCT_ONLY | G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS);
+
+  // portal初始化是异步的，可以设置属性
+  props[PROP_PORTAL] = g_param_spec_object (
+      "portal",
+      "xdg desktop portal",
+      "xdg desktop portal that provide screencast",
+      ND_TYPE_SCREENCAST_PORTAL,
+      G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS),
 
   g_object_class_install_properties (object_class, PROP_LAST, props);
 }
@@ -546,7 +548,6 @@ handle_sink_get_property (GDBusConnection *connection,
                           gpointer user_data)
 {
   NdDbusSink *sink = user_data;
-  GVariant *ret = NULL;
   if (g_strcmp0 (property_name, "Status") == 0)
     {
       return g_variant_new_int32 (sink->status);

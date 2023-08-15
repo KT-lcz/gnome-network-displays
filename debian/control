@@ -3,8 +3,7 @@ Section: utils
 Priority: optional
 Maintainer: Debian GNOME Maintainers <pkg-gnome-maintainers@lists.alioth.debian.org>
 Rules-Requires-Root: no
-Build-Depends: cmake,
-               debhelper-compat (= 12),
+Build-Depends: debhelper-compat (= 12),
                libavahi-client-dev,
                libavahi-gobject-dev,
                libgstreamer-plugins-base1.0-dev,
@@ -21,7 +20,11 @@ Vcs-Git: https://salsa.debian.org/gnome-team/gnome-network-displays.git
 
 Package: gnome-network-displays
 Architecture: any
-Depends: ${misc:Depends}, ${shlibs:Depends}, network-manager, wpasupplicant
+Depends: ${misc:Depends}, ${shlibs:Depends},
+            network-manager,
+            wpasupplicant,
+            gstreamer1.0-plugins-ugly,
+            gstreamer1.0-pipewire,
 Description: miracast application for the GNOME desktop
  This application allows you to stream your display and
  audio to other devices via Wi-Fi (aka miracast).

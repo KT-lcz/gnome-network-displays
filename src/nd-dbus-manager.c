@@ -272,13 +272,13 @@ sink_removed_cb (NdDbusManager *self,
   guint index = 0;
   if (g_ptr_array_find_with_equal_func (self->sink_list,
                                         sink,
-                                        (GEqualFunc) nd_dbus_sink_equal_sink,
+                                        (GEqualFunc) nd_dbus_sink_equal_sink, // 通过内存地址判断meta_sink和sink是否为同一个
                                         &index))
     {
-      NdDbusSink *dbus_sink = g_ptr_array_remove_index (self->sink_list, index);
-      D_ND_INFO ("Remove a exist sink: %s", nd_sink_dbus_get_hw_address (dbus_sink));
+      NdDbusSink *dbus_sink = g_ptr_array_index (self->sink_list, index);
+      D_ND_INFO ("Remove a exist sink: %s %s", nd_sink_dbus_get_name (dbus_sink), nd_sink_dbus_get_hw_address (dbus_sink));
       nd_sink_dbus_stop_export (dbus_sink);
-      g_object_unref (dbus_sink);
+      g_ptr_array_remove_index (self->sink_list, index); // https://docs.gtk.org/glib/type_func.PtrArray.remove_index.html 返回的元素内存可能已经释放
       emit_nd_manager_dbus_value_changed (self, "SinkList", get_sink_list (self));
     }
   else

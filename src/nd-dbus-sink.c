@@ -20,7 +20,7 @@ struct _NdDbusSink
   NdScreencastPortal *portal;
   NdPulseaudio *pulse;
   gboolean x11;
-  NdSink *sink;
+  NdSink *sink; // meta_sink
   // 初始化sink时完成以下dbus属性初始化
   gchar *name;
   NdSinkState status;
@@ -101,6 +101,12 @@ gchar *
 nd_sink_dbus_get_hw_address (NdDbusSink *self)
 {
   return g_strdup (self->hw_address);
+}
+
+gchar *
+nd_sink_dbus_get_name (NdDbusSink *self)
+{
+  return g_strdup (self->name);
 }
 
 static void
@@ -450,9 +456,11 @@ gboolean
 nd_dbus_sink_equal_sink (NdDbusSink *self, NdSink *sink)
 {
   // 通过self的sink和sink的mac地址对比，是否是同一个设备
-  g_autofree gchar *sink_hw_address = NULL;
-  g_object_get (sink, "hw-address", &sink_hw_address, NULL);
-  return g_str_equal (self->hw_address, sink_hw_address);
+  //  g_autofree gchar *sink_hw_address = NULL;
+  //  g_object_get (sink, "hw-address", &sink_hw_address, NULL);
+  //  return g_str_equal (self->hw_address, sink_hw_address);
+  // 通过内存地址判断meta_sink和sink是否为同一个
+  return self->sink == sink;
 }
 
 // 以下代码为dbus相关

@@ -151,7 +151,7 @@ nd_wfd_p2p_sink_get_property (GObject    *object,
       {
         const char *hw_addr;
         hw_addr = nm_wifi_p2p_peer_get_hw_address (sink->nm_peer);
-        g_value_set_string (value, hw_addr);
+        g_value_set_string (value, g_strdup (hw_addr));
         break;
       }
     case PROP_STRENGTH:

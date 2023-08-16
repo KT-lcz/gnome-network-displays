@@ -29,5 +29,6 @@ void nd_sink_dbus_stop_export (NdDbusSink *self);
 gboolean nd_dbus_sink_equal_sink (NdDbusSink *self,
                                   NdSink *sink);
 gchar *nd_sink_dbus_get_hw_address (NdDbusSink *self);
+gchar *nd_sink_dbus_get_name (NdDbusSink *self);
 
 G_END_DECLS

@@ -69,7 +69,7 @@ provider_sink_added_cb (NdMetaProvider *meta_provider, NdSink *sink, NdProvider 
 
   if (meta_sinks->len > 0)
     {
-      g_info("matched sink num >= 1");
+      g_info("matched sink num == 1");
       meta_sink = g_ptr_array_remove_index (meta_sinks, 0); // g_ptr_array_remove_index返回值是移除的那个元素
 
       while (meta_sinks->len > 0)
@@ -88,7 +88,8 @@ provider_sink_added_cb (NdMetaProvider *meta_provider, NdSink *sink, NdProvider 
             }
         }
 
-      nd_meta_sink_add_sink (meta_sink, sink);
+      // 重复sink无需再次添加
+      // nd_meta_sink_add_sink (meta_sink, sink);
     }
   else
     {
@@ -105,7 +106,7 @@ provider_sink_removed_cb (NdMetaProvider *meta_provider, NdSink *sink, NdProvide
   g_autoptr(GPtrArray) sink_matches = NULL;
   g_autoptr(NdMetaSink) meta_sink = NULL;
   guint idx = 0;
-
+  // sink 是 p2p sink
   g_object_get (sink, "matches", &sink_matches, NULL);
   g_assert (sink_matches != NULL);
 
@@ -113,6 +114,7 @@ provider_sink_removed_cb (NdMetaProvider *meta_provider, NdSink *sink, NdProvide
    * Note that we really need to search for it rather than doing
    * a faster lookup, as sink that is removed may not be reporting
    * its matches correctly anymore. */
+  // 先找到对应的meta_sink
   g_assert (g_ptr_array_find_with_equal_func (meta_provider->sinks,
                                               sink,
                                               (GEqualFunc) nd_meta_sink_has_sink,
@@ -120,14 +122,23 @@ provider_sink_removed_cb (NdMetaProvider *meta_provider, NdSink *sink, NdProvide
 
   meta_sink = g_object_ref (g_ptr_array_index (meta_provider->sinks, idx));
   g_assert (meta_sink != NULL);
-  if (nd_meta_sink_remove_sink (meta_sink, sink))
+
+  gchar *sink_name = NULL;
+  g_object_get (meta_sink, "display-name", &sink_name, NULL);
+  gchar *hw_address = NULL;
+  g_object_get (meta_sink, "hw-address", &hw_address, NULL);
+  g_debug ("provider_sink_removed_cb: sink is %s %s", sink_name, hw_address);
+
+  if (nd_meta_sink_remove_sink (meta_sink, sink)) // meta_sink 中的 current_sink 已经被clear了
     {
+      g_debug ("meta sink is empty, remove it and we are done ");
       /* meta sink is empty, remove it and we are done */
       g_ptr_array_remove (meta_provider->sinks, meta_sink);
       g_signal_emit_by_name (meta_provider, "sink-removed", meta_sink);
 
       return;
     }
+  g_debug ("meta sink is not empty");
 }
 
 static void

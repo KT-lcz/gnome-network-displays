@@ -20,11 +20,16 @@ Vcs-Git: https://salsa.debian.org/gnome-team/gnome-network-displays.git
 
 Package: gnome-network-displays
 Architecture: any
-Depends: ${misc:Depends}, ${shlibs:Depends},
-            network-manager,
-            wpasupplicant,
-            gstreamer1.0-plugins-ugly,
-            gstreamer1.0-pipewire,
+Depends:
+    network-manager,
+    wpasupplicant,
+    gstreamer1.0-plugins-ugly,
+    ${misc:Depends},
+    ${shlibs:Depends},
+    ${dist:Depends},
+Recommends:
+    xdg-desktop-portal,
+    gstreamer1.0-pipewire,
 Description: miracast application for the GNOME desktop
  This application allows you to stream your display and
  audio to other devices via Wi-Fi (aka miracast).

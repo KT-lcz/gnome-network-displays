@@ -79,6 +79,8 @@ static void emit_nd_manager_value_changed (const NdDbusSink *self,
                                            GVariant *property_value);
 static void set_prop_status (NdDbusSink *self, gint32 status);
 
+static NdSink *stream_sink = NULL;
+
 NdDbusSink *
 nd_dbus_sink_new (NdMetaProvider *provider,
                   gboolean x11,
@@ -433,7 +435,10 @@ sink_notify_state_cb (NdDbusSink *self, GParamSpec *pspec, NdSink *sink)
   switch (state)
     {
     case ND_SINK_STATE_DISCONNECTED:
-      // g_signal_handlers_disconnect_by_data(self->stream_sink,self); g_clear_object(&self->stream_sink);
+    case ND_SINK_STATE_ERROR:
+      stop_stream (self);
+      g_signal_handlers_disconnect_by_data (self->sink, self);
+      g_clear_object (&stream_sink);
       break;
     case ND_SINK_STATE_ENSURE_FIREWALL:
       break;
@@ -444,8 +449,6 @@ sink_notify_state_cb (NdDbusSink *self, GParamSpec *pspec, NdSink *sink)
     case ND_SINK_STATE_WAIT_STREAMING:
       break;
     case ND_SINK_STATE_STREAMING:
-      break;
-    case ND_SINK_STATE_ERROR:
       break;
     default:
       break;
@@ -509,7 +512,6 @@ handle_sink_method_call (GDBusConnection *connection,
   // g_dbus_method_invocation_return_value(invocation, g_variant_new("(s)", response));
   // g_dbus_method_invocation_return_error (invocation, G_DBUS_ERROR, G_DBUS_ERROR_FAILED, "Failed to switch to guest");
   NdDbusSink *sink = user_data;
-  static const NdSink *stream_sink;
   if (g_strcmp0 (method_name, "Connect") == 0)
     {
       if (stream_sink)

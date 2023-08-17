@@ -258,7 +258,7 @@ nd_dbus_sink_class_init (NdDbusSinkClass *klass)
       "x11",
       "Whether to use the x11 protocol",
       FALSE,
-      G_PARAM_CONSTRUCT_ONLY | G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS);
+      G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS);
 
   props[PROP_SINK] = g_param_spec_object (
       "sink",
@@ -629,16 +629,11 @@ notify_callback (GObject *source_object,
     {
       D_ND_WARNING ("Error sending notification: %s", error->message);
     }
-  else
-    {
-      D_ND_INFO ("Notification sent successfully!");
-    }
 }
 
 static void
 send_notify (NdDbusSink *self, const gchar *body)
 {
-  g_autoptr (GError) error = NULL;
   GVariant *notification_params = g_variant_new ("(susssasa{sv}i)",
                                                  "Deepin network display",
                                                  0,
@@ -656,5 +651,4 @@ send_notify (NdDbusSink *self, const gchar *body)
                      NULL,
                      notify_callback,
                      self);
-  g_variant_unref(notification_params);
 }

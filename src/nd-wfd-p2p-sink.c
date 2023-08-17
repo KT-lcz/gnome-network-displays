@@ -39,6 +39,7 @@ struct _NdWFDP2PSink
   GStrv               missing_video_codec;
   GStrv               missing_audio_codec;
   char               *missing_firewall_zone;
+  gchar              *hw_address;
 
   WfdServer          *server;
   guint               server_source_id;
@@ -149,9 +150,7 @@ nd_wfd_p2p_sink_get_property (GObject    *object,
       }
     case PROP_HW_ADDRESS:
       {
-        const char *hw_addr;
-        hw_addr = nm_wifi_p2p_peer_get_hw_address (sink->nm_peer);
-        g_value_set_string (value, g_strdup (hw_addr));
+        g_value_set_string (value, g_strdup (sink->hw_address));
         break;
       }
     case PROP_STRENGTH:
@@ -213,6 +212,8 @@ nd_wfd_p2p_sink_set_property (GObject      *object,
     case PROP_PEER:
       g_assert (sink->nm_peer == NULL);
       sink->nm_peer = g_value_dup_object (value);
+      const char *hw_addr = nm_wifi_p2p_peer_get_hw_address (sink->nm_peer);
+      sink->hw_address = g_strdup (hw_addr);
       // 监听peer所有的属性改变信号
       g_signal_connect_object (sink->nm_peer,
                                "notify",

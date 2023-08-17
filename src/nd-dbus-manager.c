@@ -58,6 +58,7 @@ struct _NdDbusManager
   NdNMDeviceRegistry *nm_device_registry;
   gboolean discover;
   GCancellable *cancellable;
+  GMutex sink_list_mu;
 };
 G_DEFINE_TYPE (NdDbusManager, nd_dbus_manager, G_TYPE_OBJECT)
 
@@ -90,6 +91,7 @@ nd_dbus_manager_finalize (GObject *object)
   g_clear_object (&self->nm_device_registry);
   g_cancellable_cancel (self->cancellable);
   g_clear_object (&self->cancellable);
+  g_mutex_clear (&self->sink_list_mu);
 }
 
 static void
@@ -109,6 +111,7 @@ nd_dbus_manager_init (NdDbusManager *self)
   self->use_x11 = TRUE;
   self->missing_capabilities = g_ptr_array_new_with_free_func (g_free); // 当使用g_ptr_array_free释放指针数组时,会自动调用g_free释放元素的内存
   self->sink_list = g_ptr_array_new_with_free_func (g_object_unref);
+  g_mutex_init (&self->sink_list_mu);
   GStrv missing_video = NULL;
   GStrv missing_audio = NULL;
   gboolean have_basic_codecs = FALSE;
@@ -194,11 +197,13 @@ nd_dbus_screencast_portal_init_async_cb (GObject *source_object,
             }
           D_ND_WARNING ("Falling back to X11! You need to fix your setup to avoid issues (XDG Portals and/or mutter screencast support)!");
           self->use_x11 = TRUE;
+          g_mutex_lock (&self->sink_list_mu);
           for (gint i = 0; i < self->sink_list->len; i++)
             {
               NdDbusSink *sink = (NdDbusSink *) self->sink_list->pdata[i];
               g_object_set (sink, "x11", self->use_x11, NULL);
             }
+          g_mutex_unlock (&self->sink_list_mu);
         }
 
       g_object_unref (source_object);
@@ -208,11 +213,13 @@ nd_dbus_screencast_portal_init_async_cb (GObject *source_object,
   self = ND_DBUS_MANAGER (user_data);
   self->portal = ND_SCREENCAST_PORTAL (source_object);
   // portal异步初始化,需要给所有sink设置portal
+  g_mutex_lock (&self->sink_list_mu);
   for (gint i = 0; i < self->sink_list->len; i++)
     {
       NdDbusSink *sink = (NdDbusSink *) self->sink_list->pdata[i];
       g_object_set (sink, "portal", self->portal, NULL);
     }
+  g_mutex_unlock (&self->sink_list_mu);
 }
 
 static void
@@ -239,6 +246,7 @@ sink_added_cb (NdDbusManager *self,
                NdSink *sink,
                NdProvider *provider)
 {
+  g_mutex_lock (&self->sink_list_mu);
   D_ND_INFO ("Find a new sink");
   if (g_ptr_array_find_with_equal_func (
           self->sink_list,
@@ -249,12 +257,14 @@ sink_added_cb (NdDbusManager *self,
       // 是否需要更新sink的数据
       // 正常情况应该是先移除再添加
       D_ND_INFO ("this sink is exist");
+      g_mutex_unlock (&self->sink_list_mu);
       return;
     }
 
   if (!self->discover)
     {
       D_ND_INFO ("dnd is disable,don't need add new sink");
+      g_mutex_unlock (&self->sink_list_mu);
       return;
     }
   g_autoptr (NdDbusSink) dbus_sink = nd_dbus_sink_new (self->meta_provider,
@@ -267,6 +277,7 @@ sink_added_cb (NdDbusManager *self,
   g_ptr_array_add (self->sink_list, g_object_ref (dbus_sink));
   nd_sink_dbus_export (dbus_sink);
   emit_nd_manager_dbus_value_changed (self, "SinkList", get_sink_list (self));
+  g_mutex_unlock (&self->sink_list_mu);
 }
 
 static void
@@ -274,6 +285,8 @@ sink_removed_cb (NdDbusManager *self,
                  NdSink *sink,
                  NdProvider *provider)
 {
+  // remove 和 add 操作需要加锁
+  g_mutex_lock (&self->sink_list_mu);
   D_ND_INFO ("Removing a sink");
   guint index = 0;
   if (g_ptr_array_find_with_equal_func (self->sink_list,
@@ -291,6 +304,7 @@ sink_removed_cb (NdDbusManager *self,
     {
       D_ND_WARNING ("Not exist this sink");
     }
+  g_mutex_unlock (&self->sink_list_mu);
 }
 
 static void
@@ -414,6 +428,7 @@ handle_manager_method_call (GDBusConnection *connection,
         }
       else
         {
+          g_mutex_lock (&self->sink_list_mu);
           D_ND_INFO ("disable dnd, clear all sinks");
           // 先遍历所有sink停止导出，再重置GPtrArray的内存;
           g_ptr_array_foreach (self->sink_list,
@@ -423,6 +438,7 @@ handle_manager_method_call (GDBusConnection *connection,
           emit_nd_manager_dbus_value_changed (self,
                                               "SinkList",
                                               get_sink_list (self));
+          g_mutex_unlock (&self->sink_list_mu);
         }
     }
   else
@@ -442,6 +458,7 @@ get_enabled (NdDbusManager *self)
   return g_variant_new_boolean (self->discover);
 }
 
+// 调用需要加锁
 static GVariant *
 get_sink_list (NdDbusManager *self)
 {
@@ -484,8 +501,10 @@ set_dbus_prop_discover (NdDbusManager *self, gboolean enable)
 static void
 set_dbus_prop_sink_list (NdDbusManager *self, GPtrArray *sink_list)
 {
+  g_mutex_lock (&self->sink_list_mu);
   self->sink_list = sink_list;
   emit_nd_manager_dbus_value_changed (self, "SinkList", get_sink_list (self));
+  g_mutex_unlock (&self->sink_list_mu);
 }
 
 static void
@@ -537,7 +556,10 @@ handle_manager_get_property (GDBusConnection *connection,
   NdDbusManager *self = user_data;
   if (g_strcmp0 (property_name, "SinkList") == 0)
     {
-      return get_sink_list (self);
+      g_mutex_lock (&self->sink_list_mu);
+      GVariant *ret = get_sink_list (self);
+      g_mutex_unlock (&self->sink_list_mu);
+      return ret;
     }
   if (g_strcmp0 (property_name, "Enabled") == 0)
     {

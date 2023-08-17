@@ -105,7 +105,8 @@ nd_dbus_manager_init (NdDbusManager *self)
 {
   NdScreencastPortal *portal = NULL;
   NdPulseaudio *pulse = NULL;
-  self->discover = TRUE;                                                // 调试时默认用TRUE
+  self->discover = TRUE; // 调试时默认用TRUE
+  self->use_x11 = TRUE;
   self->missing_capabilities = g_ptr_array_new_with_free_func (g_free); // 当使用g_ptr_array_free释放指针数组时,会自动调用g_free释放元素的内存
   self->sink_list = g_ptr_array_new_with_free_func (g_object_unref);
   GStrv missing_video = NULL;
@@ -193,6 +194,11 @@ nd_dbus_screencast_portal_init_async_cb (GObject *source_object,
             }
           D_ND_WARNING ("Falling back to X11! You need to fix your setup to avoid issues (XDG Portals and/or mutter screencast support)!");
           self->use_x11 = TRUE;
+          for (gint i = 0; i < self->sink_list->len; i++)
+            {
+              NdDbusSink *sink = (NdDbusSink *) self->sink_list->pdata[i];
+              g_object_set (sink, "x11", self->use_x11, NULL);
+            }
         }
 
       g_object_unref (source_object);

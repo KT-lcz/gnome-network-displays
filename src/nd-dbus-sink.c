@@ -16,6 +16,7 @@ struct _NdDbusSink
 
   // 需要在初始化时完成以下变量的初始化
   GDBusConnection *bus;
+  GDBusProxy *notify_proxy;
   NdMetaProvider *provider;
   NdScreencastPortal *portal;
   NdPulseaudio *pulse;
@@ -78,6 +79,7 @@ static void emit_nd_manager_value_changed (const NdDbusSink *self,
                                            const gchar *property_name,
                                            GVariant *property_value);
 static void set_prop_status (NdDbusSink *self, gint32 status);
+static void send_notify (NdDbusSink *self, const gchar *body);
 
 static NdSink *stream_sink = NULL;
 
@@ -298,6 +300,20 @@ nd_dbus_sink_init (NdDbusSink *self)
                                                 "</node>";
   self->network_display_sink_info = g_dbus_node_info_new_for_xml (network_display_sink_interface, NULL);
   g_assert (self->network_display_sink_info != NULL);
+
+  g_autoptr (GError) error = NULL;
+  self->notify_proxy = g_dbus_proxy_new_for_bus_sync (G_BUS_TYPE_SESSION,
+                                                      G_DBUS_PROXY_FLAGS_NONE,
+                                                      NULL,
+                                                      "org.freedesktop.Notifications",
+                                                      "/org/freedesktop/Notifications",
+                                                      "com.deepin.dde.Notification",
+                                                      NULL,
+                                                      &error);
+  if (!self->notify_proxy)
+    {
+      D_ND_WARNING ("Unable to connect Notifications: %s\n", error->message);
+    }
 }
 
 // from find_sink_list_row_activated_cb 连接设备
@@ -439,6 +455,7 @@ sink_notify_state_cb (NdDbusSink *self, GParamSpec *pspec, NdSink *sink)
       stop_stream (self);
       g_signal_handlers_disconnect_by_data (self->sink, self);
       g_clear_object (&stream_sink);
+      send_notify (self, "error");
       break;
     case ND_SINK_STATE_ENSURE_FIREWALL:
       break;
@@ -449,6 +466,7 @@ sink_notify_state_cb (NdDbusSink *self, GParamSpec *pspec, NdSink *sink)
     case ND_SINK_STATE_WAIT_STREAMING:
       break;
     case ND_SINK_STATE_STREAMING:
+      send_notify (self, "streaming");
       break;
     default:
       break;
@@ -595,4 +613,48 @@ emit_nd_manager_value_changed (const NdDbusSink *self,
                                   DEEPIN_ND_SINK_DBUS_INTERFACE,
                                   property_name,
                                   property_value);
+}
+
+static void
+notify_callback (GObject *source_object,
+                 GAsyncResult *res,
+                 gpointer user_data)
+{
+  g_autoptr (GError) error = NULL;
+
+  // Complete the async call
+  g_dbus_proxy_call_finish (G_DBUS_PROXY (source_object), res, &error);
+
+  if (error)
+    {
+      D_ND_WARNING ("Error sending notification: %s", error->message);
+    }
+  else
+    {
+      D_ND_INFO ("Notification sent successfully!");
+    }
+}
+
+static void
+send_notify (NdDbusSink *self, const gchar *body)
+{
+  g_autoptr (GError) error = NULL;
+  GVariant *notification_params = g_variant_new ("(susssasa{sv}i)",
+                                                 "Deepin network display",
+                                                 0,
+                                                 "dialog-information",
+                                                 "network display",
+                                                 body,
+                                                 NULL,
+                                                 NULL,
+                                                 0);
+  g_dbus_proxy_call (self->notify_proxy,
+                     "Notify",
+                     notification_params,
+                     G_DBUS_CALL_FLAGS_NONE,
+                     -1,
+                     NULL,
+                     notify_callback,
+                     self);
+  g_variant_unref(notification_params);
 }

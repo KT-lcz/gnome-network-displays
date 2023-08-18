@@ -17,6 +17,7 @@ struct _NdDbusSink
   // 需要在初始化时完成以下变量的初始化
   GDBusConnection *bus;
   GDBusProxy *notify_proxy;
+  GDBusProxy *display_proxy;
   NdMetaProvider *provider;
   NdScreencastPortal *portal;
   NdPulseaudio *pulse;
@@ -314,6 +315,19 @@ nd_dbus_sink_init (NdDbusSink *self)
     {
       D_ND_WARNING ("Unable to connect Notifications: %s\n", error->message);
     }
+
+  self->display_proxy = g_dbus_proxy_new_for_bus_sync (G_BUS_TYPE_SESSION,
+                                                       G_DBUS_PROXY_FLAGS_NONE,
+                                                       NULL,
+                                                       "com.deepin.daemon.Display",
+                                                       "/com/deepin/daemon/Display",
+                                                       "com.deepin.daemon.Display",
+                                                       NULL,
+                                                       &error);
+  if (!self->display_proxy)
+    {
+      D_ND_WARNING ("Unable to connect display: %s\n", error->message);
+    }
 }
 
 // from find_sink_list_row_activated_cb 连接设备
@@ -390,7 +404,51 @@ sink_create_video_source_cb (NdDbusSink *self, NdSink *sink)
   bin = GST_BIN (gst_bin_new ("screencast source bin"));
   D_ND_DEBUG ("use x11: %d", self->x11);
   if (self->x11)
-    src = gst_element_factory_make ("ximagesrc", "X11 screencast source");
+    {
+      // x11下需要处理多屏场景，先判断屏幕数量，再获取主屏的坐标和尺寸，计算后设置给ximagesrc，达到只获取主屏显示内容的效果。
+      guint screen_size = 0;
+      gint16 x, y;
+      guint16 width, height;
+      if (self->display_proxy)
+        {
+          g_autoptr (GVariant) property_value = g_dbus_proxy_get_cached_property (self->display_proxy, "Monitors");
+          if (property_value == NULL)
+            {
+              D_ND_WARNING ("Error getting Monitors value");
+            }
+          else
+            {
+              g_autoptr (GVariantIter) monitor_iter = NULL;
+              g_variant_get (property_value, "ao", &monitor_iter);
+              while (g_variant_iter_loop (monitor_iter, "&o", NULL))
+                {
+                  screen_size++;
+                }
+            }
+
+          if (screen_size >= 2)
+            {
+              property_value = g_dbus_proxy_get_cached_property (self->display_proxy, "PrimaryRect");
+              if (property_value == NULL)
+                {
+                  D_ND_WARNING ("Error getting PrimaryRect value");
+                }
+              else
+                {
+                  g_variant_get (property_value, "(nnqq)", &x, &y, &width, &height);
+                  D_ND_INFO ("Primary rect: %d %d %d %d", x, y, width, height);
+                }
+            }
+        }
+
+      src = gst_element_factory_make ("ximagesrc", "X11 screencast source");
+      g_object_set (src,
+                    "startx", x,
+                    "starty", y,
+                    "endx", x + width - 1,
+                    "endy", y + height - 1,
+                    NULL);
+    }
   else
     src = nd_screencast_portal_get_source (self->portal);
 
@@ -634,6 +692,7 @@ notify_callback (GObject *source_object,
 static void
 send_notify (NdDbusSink *self, const gchar *body)
 {
+  return;
   GVariant *notification_params = g_variant_new ("(susssasa{sv}i)",
                                                  "Deepin network display",
                                                  0,

@@ -140,14 +140,14 @@ nd_dbus_manager_init (NdDbusManager *self)
   // 监听sink增减,创建对应的dbus-sink
   connect_provider_signal (self);
 
-  // 异步初始化portal
-  self->cancellable = g_cancellable_new ();
-  portal = nd_screencast_portal_new ();
-  g_async_initable_init_async (G_ASYNC_INITABLE (portal),
-                               G_PRIORITY_LOW,
-                               self->cancellable,
-                               nd_dbus_screencast_portal_init_async_cb,
-                               self);
+//  // 异步初始化portal
+//  self->cancellable = g_cancellable_new ();
+//  portal = nd_screencast_portal_new ();
+//  g_async_initable_init_async (G_ASYNC_INITABLE (portal),
+//                               G_PRIORITY_LOW,
+//                               self->cancellable,
+//                               nd_dbus_screencast_portal_init_async_cb,
+//                               self);
   // 异步初始化pulseaudio
   pulse = nd_pulseaudio_new ();
   g_async_initable_init_async (G_ASYNC_INITABLE (pulse),

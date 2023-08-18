@@ -13,7 +13,8 @@ struct _NdDbusSink
   GObject parent_instance;
   GDBusNodeInfo *network_display_sink_info;
   guint registration_id;
-
+  GCancellable *cancellable;
+  gboolean is_portal_init;
   // 需要在初始化时完成以下变量的初始化
   GDBusConnection *bus;
   GDBusProxy *notify_proxy;
@@ -58,7 +59,9 @@ static GstElement *sink_create_audio_source_cb (NdDbusSink *self,
 static void sink_notify_state_cb (NdDbusSink *self,
                                   GParamSpec *pspec,
                                   NdSink *sink);
-
+static void nd_dbus_screencast_portal_init_async_cb (GObject *source_object,
+                                                     GAsyncResult *res,
+                                                     gpointer user_data);
 static void
 handle_sink_method_call (GDBusConnection *connection,
                          const gchar *sender,
@@ -82,7 +85,7 @@ static void emit_nd_manager_value_changed (const NdDbusSink *self,
 static void set_prop_status (NdDbusSink *self, gint32 status);
 static void send_notify (NdDbusSink *self, const gchar *body);
 
-static NdSink *stream_sink = NULL;
+static NdSink *stream_sink = NULL; // 目前一定是 p2p sink
 
 NdDbusSink *
 nd_dbus_sink_new (NdMetaProvider *provider,
@@ -128,13 +131,17 @@ nd_dbus_sink_finalize (GObject *object)
   g_clear_object (&self->portal);
   g_clear_object (&self->pulse);
   g_clear_object (&self->sink);
+  g_cancellable_cancel (self->cancellable);
+  g_clear_object (&self->cancellable);
+  g_clear_object (&self->display_proxy);
+  g_clear_object (&self->notify_proxy);
 }
 
 static void
 nd_dbus_sink_get_property (GObject *object, guint prop_id, GValue *value, GParamSpec *pspec)
 {
   // 暂时没有get需要
-  NdDbusSink *sink = ND_DBUS_SINK (object);
+  //  NdDbusSink *sink = ND_DBUS_SINK (object);
   switch (prop_id)
     {
     case PROP_PROVIDER:
@@ -330,44 +337,43 @@ nd_dbus_sink_init (NdDbusSink *self)
     }
 }
 
-// from find_sink_list_row_activated_cb 连接设备
-static NdSink *
-start_stream (NdDbusSink *self)
+static void
+nd_sink_start_stream_real (NdDbusSink *self)
 {
-
   if (!self->portal && !self->x11)
     {
       D_ND_WARNING ("Cannot start streaming right now as we don't have a portal!");
-      return NULL;
+      return;
     }
 
-  self->sink = nd_sink_start_stream (self->sink);
+  // 正常返回的是P2P sink
+  stream_sink = g_object_ref (nd_sink_start_stream (self->sink));
 
   // 返回的stream_sink是p2p sink
-  if (!self->sink)
+  if (!stream_sink)
     {
       D_ND_WARNING ("NdWindow: Could not start streaming!");
-      return NULL;
+      return;
     }
-  g_signal_connect_object (self->sink,
+  g_signal_connect_object (stream_sink,
                            "create-source",
                            (GCallback) sink_create_video_source_cb,
                            self,
                            G_CONNECT_SWAPPED);
 
-  g_signal_connect_object (self->sink,
+  g_signal_connect_object (stream_sink,
                            "create-audio-source",
                            (GCallback) sink_create_audio_source_cb,
                            self,
                            G_CONNECT_SWAPPED);
 
-  g_signal_connect_object (self->sink,
+  g_signal_connect_object (stream_sink,
                            "notify::state",
                            (GCallback) sink_notify_state_cb,
                            self,
                            G_CONNECT_SWAPPED);
   /* We might have moved into the error state in the meantime. */
-  sink_notify_state_cb (self, NULL, self->sink);
+  sink_notify_state_cb (self, NULL, stream_sink);
   // TODO 使用 g_object_bind_property 进行单项数据绑定或者监听属性变化
   /*
   g_ptr_array_add (self->sink_property_bindings,
@@ -380,17 +386,81 @@ start_stream (NdDbusSink *self)
 
   // 连接之后可以关闭扫描,但是manager状态不会变化
   g_object_set (self->provider, "discover", FALSE, NULL);
-  return self->sink;
+}
+
+static void
+nd_dbus_screencast_portal_init_async_cb (GObject *source_object,
+                                         GAsyncResult *res,
+                                         gpointer user_data)
+{
+  NdDbusSink *self = NULL;
+  g_autoptr (GError) error = NULL;
+  if (!g_async_initable_init_finish (G_ASYNC_INITABLE (source_object), res, &error))
+    {
+      if (!g_error_matches (error, G_IO_ERROR, G_IO_ERROR_CANCELLED))
+        {
+          D_ND_WARNING ("Error initializing screencast portal: %s", error->message);
+
+          self = ND_DBUS_SINK (user_data);
+          self->is_portal_init = FALSE;
+          /* Unknown method means the portal does not exist, give a slightly
+           * more specific warning then.
+           */
+          if (g_error_matches (error, G_DBUS_ERROR, G_DBUS_ERROR_UNKNOWN_METHOD))
+            {
+              D_ND_WARNING ("Screencast portal is unavailable! It is required to select the monitor to stream!");
+            }
+          D_ND_WARNING ("Falling back to X11! You need to fix your setup to avoid issues (XDG Portals and/or mutter screencast support)!");
+          self->x11 = TRUE;
+          nd_sink_start_stream_real (self);
+        }
+      g_object_unref (source_object);
+      return;
+    }
+
+  self = ND_DBUS_SINK (user_data);
+  self->is_portal_init = FALSE;
+  self->portal = ND_SCREENCAST_PORTAL (source_object);
+  nd_sink_start_stream_real (self);
+}
+
+// from find_sink_list_row_activated_cb 连接设备
+static void
+init_portal_async (NdDbusSink *self)
+{
+  NdScreencastPortal *portal = NULL;
+  self->cancellable = g_cancellable_new ();
+  portal = nd_screencast_portal_new ();
+  self->portal = portal;
+  g_async_initable_init_async (G_ASYNC_INITABLE (portal),
+                               G_PRIORITY_LOW,
+                               self->cancellable,
+                               nd_dbus_screencast_portal_init_async_cb,
+                               self);
 }
 
 static void
 stop_stream (NdDbusSink *self)
 {
-  if (!self->sink)
+  if (!stream_sink)
     return;
-  nd_sink_stop_stream (self->sink);
+  nd_sink_stop_stream (stream_sink);
   // 关闭串流之后,重新开启扫描
   g_object_set (self->provider, "discover", TRUE, NULL);
+}
+
+static void
+handle_cancel (NdDbusSink *self)
+{
+  stop_stream (self);
+  if (stream_sink)
+    {
+      g_signal_handlers_disconnect_by_data (stream_sink, self);
+      g_object_unref (stream_sink);
+      stream_sink = NULL;
+    }
+  if (self->cancellable)
+    g_cancellable_cancel (self->cancellable);
 }
 
 static GstElement *
@@ -407,16 +477,14 @@ sink_create_video_source_cb (NdDbusSink *self, NdSink *sink)
     {
       // x11下需要处理多屏场景，先判断屏幕数量，再获取主屏的坐标和尺寸，计算后设置给ximagesrc，达到只获取主屏显示内容的效果。
       guint screen_size = 0;
-      gint16 x, y;
-      guint16 width, height;
+      gint16 start_x = 0;
+      gint16 start_y = 0;
+      guint16 width = 0;
+      guint16 height = 0;
       if (self->display_proxy)
         {
           g_autoptr (GVariant) property_value = g_dbus_proxy_get_cached_property (self->display_proxy, "Monitors");
-          if (property_value == NULL)
-            {
-              D_ND_WARNING ("Error getting Monitors value");
-            }
-          else
+          if (property_value)
             {
               g_autoptr (GVariantIter) monitor_iter = NULL;
               g_variant_get (property_value, "ao", &monitor_iter);
@@ -429,24 +497,20 @@ sink_create_video_source_cb (NdDbusSink *self, NdSink *sink)
           if (screen_size >= 2)
             {
               property_value = g_dbus_proxy_get_cached_property (self->display_proxy, "PrimaryRect");
-              if (property_value == NULL)
+              if (property_value)
                 {
-                  D_ND_WARNING ("Error getting PrimaryRect value");
-                }
-              else
-                {
-                  g_variant_get (property_value, "(nnqq)", &x, &y, &width, &height);
-                  D_ND_INFO ("Primary rect: %d %d %d %d", x, y, width, height);
+                  g_variant_get (property_value, "(nnqq)", &start_x, &start_y, &width, &height);
+                  D_ND_INFO ("Primary rect: %d %d %d %d", start_x, start_y, width, height);
                 }
             }
         }
 
       src = gst_element_factory_make ("ximagesrc", "X11 screencast source");
       g_object_set (src,
-                    "startx", x,
-                    "starty", y,
-                    "endx", x + width - 1,
-                    "endy", y + height - 1,
+                    "startx", start_x,
+                    "starty", start_y,
+                    "endx", start_x + width - 1,
+                    "endy", start_y + height - 1,
                     NULL);
     }
   else
@@ -510,9 +574,7 @@ sink_notify_state_cb (NdDbusSink *self, GParamSpec *pspec, NdSink *sink)
     {
     case ND_SINK_STATE_DISCONNECTED:
     case ND_SINK_STATE_ERROR:
-      stop_stream (self);
-      g_signal_handlers_disconnect_by_data (self->sink, self);
-      g_clear_object (&stream_sink);
+      handle_cancel (self);
       send_notify (self, "error");
       break;
     case ND_SINK_STATE_ENSURE_FIREWALL:
@@ -587,10 +649,10 @@ handle_sink_method_call (GDBusConnection *connection,
   // g_dbus_method_invocation_return_value(invocation, NULL);
   // g_dbus_method_invocation_return_value(invocation, g_variant_new("(s)", response));
   // g_dbus_method_invocation_return_error (invocation, G_DBUS_ERROR, G_DBUS_ERROR_FAILED, "Failed to switch to guest");
-  NdDbusSink *sink = user_data;
+  NdDbusSink *self = user_data;
   if (g_strcmp0 (method_name, "Connect") == 0)
     {
-      if (stream_sink)
+      if (stream_sink || self->is_portal_init)
         {
           g_dbus_method_invocation_return_error (invocation,
                                                  G_DBUS_ERROR,
@@ -598,11 +660,12 @@ handle_sink_method_call (GDBusConnection *connection,
                                                  "Don't allow connect multiple sink");
           return;
         }
-      stream_sink = g_object_ref (start_stream (sink));
+      self->is_portal_init = TRUE;
+      init_portal_async (self);
     }
   else if (g_strcmp0 (method_name, "Cancel") == 0)
     {
-      if (!stream_sink)
+      if (!stream_sink && !self->is_portal_init)
         {
           g_dbus_method_invocation_return_error (invocation,
                                                  G_DBUS_ERROR,
@@ -610,8 +673,8 @@ handle_sink_method_call (GDBusConnection *connection,
                                                  "Not exist streaming sink");
           return;
         }
-      stop_stream (sink);
-      g_clear_object (&stream_sink);
+      self->is_portal_init = FALSE;
+      handle_cancel (self);
     }
   else
     {

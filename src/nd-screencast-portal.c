@@ -28,6 +28,8 @@ static gboolean nd_screencast_portal_async_initable_init_finish (GAsyncInitable 
                                                                  GAsyncResult   *res,
                                                                  GError        **error);
 
+static void nd_screencast_portal_close (NdScreencastPortal *self);
+
 G_DEFINE_TYPE_EXTENDED (NdScreencastPortal, nd_screencast_portal, G_TYPE_OBJECT, 0,
                         G_IMPLEMENT_INTERFACE (G_TYPE_ASYNC_INITABLE,
                                                nd_screencast_portal_async_initable_iface_init);
@@ -403,11 +405,11 @@ init_cancelable_cancelled_cb (GCancellable *external, GTask *task)
                                             self->portal_signal_id);
       self->portal_signal_id = 0;
     }
-
+  nd_screencast_portal_close (self);
   /* Cancel the underlying action and return the task immediately. */
   g_cancellable_cancel (self->cancellable);
   g_task_return_error_if_cancelled (task);
-  g_object_unref (task);
+//  g_object_unref (task);
 }
 
 static void
@@ -555,4 +557,31 @@ nd_screencast_portal_get_source (NdScreencastPortal *self)
   g_object_unref (out_fd_list);
 
   return g_steal_pointer (&src);
+}
+
+static void
+nd_screencast_portal_close (NdScreencastPortal *self)
+{
+  if (self->session_handle)
+    {
+      g_debug ("session_handle is %s", self->session_handle);
+      GDBusProxy *screencast_session = NULL;
+      screencast_session = g_dbus_proxy_new_for_bus_sync (G_BUS_TYPE_SESSION,
+                                                          G_DBUS_PROXY_FLAGS_NONE,
+                                                          NULL,
+                                                          "org.freedesktop.portal.Desktop",
+                                                          self->session_handle,
+                                                          "org.freedesktop.portal.Session",
+                                                          NULL,
+                                                          NULL);
+      g_dbus_proxy_call_sync (G_DBUS_PROXY (screencast_session),
+                              "Close",
+                              g_variant_new ("()"),
+                              G_DBUS_CALL_FLAGS_NONE,
+                              -1,
+                              NULL,
+                              NULL);
+
+      g_object_unref (screencast_session);
+    }
 }

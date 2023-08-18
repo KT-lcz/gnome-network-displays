@@ -84,6 +84,7 @@ static void emit_nd_manager_value_changed (const NdDbusSink *self,
                                            GVariant *property_value);
 static void set_prop_status (NdDbusSink *self, gint32 status);
 static void send_notify (NdDbusSink *self, const gchar *body);
+static void handle_cancel (NdDbusSink *self);
 
 static NdSink *stream_sink = NULL; // 目前一定是 p2p sink
 
@@ -410,6 +411,16 @@ nd_dbus_screencast_portal_init_async_cb (GObject *source_object,
             {
               D_ND_WARNING ("Screencast portal is unavailable! It is required to select the monitor to stream!");
             }
+          D_ND_WARNING ("XDG_SESSION_TYPE %s", g_getenv ("XDG_SESSION_TYPE"));
+          if (error->code == G_IO_ERROR_FAILED && (g_strcmp0 (g_getenv ("XDG_SESSION_TYPE"), "wayland") == 0))
+            {
+              // 用户取消share的情况下
+              D_ND_WARNING ("portal init failed in wayland, need abort require");
+              // 应该还需要修改状态，用于通知前端
+              handle_cancel (self);
+              g_object_unref (source_object);
+              return;
+            }
           D_ND_WARNING ("Falling back to X11! You need to fix your setup to avoid issues (XDG Portals and/or mutter screencast support)!");
           self->x11 = TRUE;
           nd_sink_start_stream_real (self);
@@ -419,6 +430,7 @@ nd_dbus_screencast_portal_init_async_cb (GObject *source_object,
     }
 
   self = ND_DBUS_SINK (user_data);
+  self->x11 = FALSE;
   self->is_portal_init = FALSE;
   self->portal = ND_SCREENCAST_PORTAL (source_object);
   nd_sink_start_stream_real (self);
@@ -481,6 +493,8 @@ sink_create_video_source_cb (NdDbusSink *self, NdSink *sink)
       gint16 start_y = 0;
       guint16 width = 0;
       guint16 height = 0;
+      guint end_x = 0;
+      guint end_y = 0;
       if (self->display_proxy)
         {
           g_autoptr (GVariant) property_value = g_dbus_proxy_get_cached_property (self->display_proxy, "Monitors");
@@ -501,16 +515,19 @@ sink_create_video_source_cb (NdDbusSink *self, NdSink *sink)
                 {
                   g_variant_get (property_value, "(nnqq)", &start_x, &start_y, &width, &height);
                   D_ND_INFO ("Primary rect: %d %d %d %d", start_x, start_y, width, height);
+                  end_x = start_x + width - 1;
+                  end_y = start_y + height - 1;
                 }
             }
         }
 
       src = gst_element_factory_make ("ximagesrc", "X11 screencast source");
+
       g_object_set (src,
                     "startx", start_x,
                     "starty", start_y,
-                    "endx", start_x + width - 1,
-                    "endy", start_y + height - 1,
+                    "endx", end_x,
+                    "endy", end_y,
                     NULL);
     }
   else

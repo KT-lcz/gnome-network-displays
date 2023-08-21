@@ -14,9 +14,6 @@
 
 static void connect_provider_signal (NdDbusManager *self);
 static void gen_node_info_by_xml (NdDbusManager *self);
-static void nd_dbus_screencast_portal_init_async_cb (GObject *source_object,
-                                                     GAsyncResult *res,
-                                                     gpointer user_data);
 static void nd_dbus_pulseaudio_init_async_cb (GObject *source_object,
                                               GAsyncResult *res,
                                               gpointer user_data);
@@ -140,14 +137,6 @@ nd_dbus_manager_init (NdDbusManager *self)
   // 监听sink增减,创建对应的dbus-sink
   connect_provider_signal (self);
 
-//  // 异步初始化portal
-//  self->cancellable = g_cancellable_new ();
-//  portal = nd_screencast_portal_new ();
-//  g_async_initable_init_async (G_ASYNC_INITABLE (portal),
-//                               G_PRIORITY_LOW,
-//                               self->cancellable,
-//                               nd_dbus_screencast_portal_init_async_cb,
-//                               self);
   // 异步初始化pulseaudio
   pulse = nd_pulseaudio_new ();
   g_async_initable_init_async (G_ASYNC_INITABLE (pulse),
@@ -171,55 +160,6 @@ on_meta_provider_has_provider_changed_cb (NdDbusManager *self,
     add_dbus_missing_capabilities (self, not_support_P2P);
   else
     delete_dbus_missing_capabilities (self, not_support_P2P);
-}
-
-static void
-nd_dbus_screencast_portal_init_async_cb (GObject *source_object,
-                                         GAsyncResult *res,
-                                         gpointer user_data)
-{
-  NdDbusManager *self = NULL;
-  g_autoptr (GError) error = NULL;
-  if (!g_async_initable_init_finish (G_ASYNC_INITABLE (source_object), res, &error))
-    {
-      if (!g_error_matches (error, G_IO_ERROR, G_IO_ERROR_CANCELLED))
-        {
-          D_ND_WARNING ("Error initializing screencast portal: %s", error->message);
-
-          self = ND_DBUS_MANAGER (user_data);
-
-          /* Unknown method means the portal does not exist, give a slightly
-           * more specific warning then.
-           */
-          if (g_error_matches (error, G_DBUS_ERROR, G_DBUS_ERROR_UNKNOWN_METHOD))
-            {
-              D_ND_WARNING ("Screencast portal is unavailable! It is required to select the monitor to stream!");
-            }
-          D_ND_WARNING ("Falling back to X11! You need to fix your setup to avoid issues (XDG Portals and/or mutter screencast support)!");
-          self->use_x11 = TRUE;
-          g_mutex_lock (&self->sink_list_mu);
-          for (gint i = 0; i < self->sink_list->len; i++)
-            {
-              NdDbusSink *sink = (NdDbusSink *) self->sink_list->pdata[i];
-              g_object_set (sink, "x11", self->use_x11, NULL);
-            }
-          g_mutex_unlock (&self->sink_list_mu);
-        }
-
-      g_object_unref (source_object);
-      return;
-    }
-
-  self = ND_DBUS_MANAGER (user_data);
-  self->portal = ND_SCREENCAST_PORTAL (source_object);
-  // portal异步初始化,需要给所有sink设置portal
-  g_mutex_lock (&self->sink_list_mu);
-  for (gint i = 0; i < self->sink_list->len; i++)
-    {
-      NdDbusSink *sink = (NdDbusSink *) self->sink_list->pdata[i];
-      g_object_set (sink, "portal", self->portal, NULL);
-    }
-  g_mutex_unlock (&self->sink_list_mu);
 }
 
 static void

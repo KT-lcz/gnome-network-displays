@@ -39,6 +39,8 @@ static const gchar *no_exist_wireless = "NoExistWireless";
 static const gchar *not_support_P2P = "NotSupportP2P";
 static const gchar *no_video_encoder = "NoVideoEncoder";
 
+static GMainLoop *loop;
+
 struct _NdDbusManager
 {
   GObject parent_instance;
@@ -72,6 +74,7 @@ nd_dbus_manager_new (void)
 static void
 nd_dbus_manager_finalize (GObject *object)
 {
+  D_ND_INFO ("ND DBUS MANAGER FINALIZE");
   G_OBJECT_CLASS (nd_dbus_manager_parent_class)->finalize (object);
 
   NdDbusManager *self = ND_DBUS_MANAGER (object);
@@ -379,6 +382,7 @@ handle_manager_method_call (GDBusConnection *connection,
                                               "SinkList",
                                               get_sink_list (self));
           g_mutex_unlock (&self->sink_list_mu);
+          g_main_loop_quit(loop);
         }
     }
   else
@@ -547,9 +551,10 @@ dbus_export (NdDbusManager *self)
       on_name_lost,
       self,
       NULL);
-  GMainLoop *loop = g_main_loop_new (NULL, FALSE);
+  loop = g_main_loop_new (NULL, FALSE);
   g_main_loop_run (loop);
   g_bus_unown_name (owner_id);
+  g_main_loop_unref(loop);
 }
 
 static void

@@ -28,6 +28,8 @@ start_deepin_process ()
 {
   NdDbusManager *nd_dbus = nd_dbus_manager_new ();
   dbus_export (nd_dbus);
+  g_info ("stop dbus export");
+  g_object_unref (nd_dbus);
 }
 
 static void

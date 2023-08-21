@@ -85,6 +85,7 @@ static void emit_nd_manager_value_changed (const NdDbusSink *self,
 static void set_prop_status (NdDbusSink *self, gint32 status);
 static void send_notify (NdDbusSink *self, const gchar *body);
 static void handle_cancel (NdDbusSink *self);
+static void set_prop_name (NdDbusSink *self, const gchar *name);
 
 static NdSink *stream_sink = NULL; // 目前一定是 p2p sink
 
@@ -161,6 +162,15 @@ nd_dbus_sink_get_property (GObject *object, guint prop_id, GValue *value, GParam
 }
 
 static void
+nd_dbus_sink_sync (NdDbusSink *self, GParamSpec *pspec, NdSink *sink)
+{
+  g_autofree gchar *sink_name = NULL;
+  g_object_get (self->sink, "display-name", &sink_name, NULL);
+  if (sink_name)
+    set_prop_name (self, g_strdup (sink_name));
+}
+
+static void
 nd_dbus_sink_prop_init (NdDbusSink *self)
 {
   if (self->sink)
@@ -178,6 +188,12 @@ nd_dbus_sink_prop_init (NdDbusSink *self)
       NdSinkState state = ND_SINK_STATE_DISCONNECTED;
       g_object_get (self->sink, "state", &state, NULL);
       self->status = state;
+
+      g_signal_connect_object (self->sink,
+                               "notify",
+                               (GCallback) nd_dbus_sink_sync,
+                               self,
+                               G_CONNECT_SWAPPED);
     }
 }
 
@@ -735,10 +751,17 @@ handle_sink_get_property (GDBusConnection *connection,
 }
 
 static void
+set_prop_name (NdDbusSink *self, const gchar *name)
+{
+  self->name = g_strdup (name);
+  emit_nd_manager_value_changed (self, "Name", g_variant_new_string (self->name));
+}
+
+static void
 set_prop_status (NdDbusSink *self, gint32 status)
 {
   self->status = status;
-  emit_nd_manager_value_changed (self, "status", g_variant_new_int32 (status));
+  emit_nd_manager_value_changed (self, "Status", g_variant_new_int32 (status));
 }
 
 static void
@@ -746,11 +769,12 @@ emit_nd_manager_value_changed (const NdDbusSink *self,
                                const gchar *property_name,
                                GVariant *property_value)
 {
-  emit_object_dbus_value_changed (self->bus,
-                                  DEEPIN_ND_SINK_DBUS_PATH,
-                                  DEEPIN_ND_SINK_DBUS_INTERFACE,
-                                  property_name,
-                                  property_value);
+  if (self->bus)
+    emit_object_dbus_value_changed (self->bus,
+                                    DEEPIN_ND_SINK_DBUS_PATH,
+                                    DEEPIN_ND_SINK_DBUS_INTERFACE,
+                                    property_name,
+                                    property_value);
 }
 
 static void

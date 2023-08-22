@@ -219,8 +219,9 @@ sink_added_cb (NdDbusManager *self,
   D_ND_INFO ("not exist this sink ,start add a new sink: %s", nd_sink_dbus_get_hw_address (dbus_sink));
   g_ptr_array_add (self->sink_list, g_object_ref (dbus_sink));
   nd_sink_dbus_export (dbus_sink);
-  emit_nd_manager_dbus_value_changed (self, "SinkList", get_sink_list (self));
+  g_autoptr (GVariant) sink_list = get_sink_list (self);
   g_mutex_unlock (&self->sink_list_mu);
+  emit_nd_manager_dbus_value_changed (self, "SinkList", sink_list);
 }
 
 static void
@@ -241,7 +242,8 @@ sink_removed_cb (NdDbusManager *self,
       D_ND_INFO ("Remove a exist sink: %s %s", nd_sink_dbus_get_name (dbus_sink), nd_sink_dbus_get_hw_address (dbus_sink));
       nd_sink_dbus_stop_export (dbus_sink);
       g_ptr_array_remove_index (self->sink_list, index); // https://docs.gtk.org/glib/type_func.PtrArray.remove_index.html 返回的元素内存可能已经释放
-      emit_nd_manager_dbus_value_changed (self, "SinkList", get_sink_list (self));
+      g_autoptr (GVariant) sink_list = get_sink_list (self);
+      emit_nd_manager_dbus_value_changed (self, "SinkList", sink_list);
     }
   else
     {
@@ -378,11 +380,12 @@ handle_manager_method_call (GDBusConnection *connection,
                                sink_list_free_element,
                                NULL);
           self->sink_list = g_ptr_array_new_full (0, g_object_unref);
+          g_autoptr (GVariant) sink_list = get_sink_list (self);
           emit_nd_manager_dbus_value_changed (self,
                                               "SinkList",
-                                              get_sink_list (self));
+                                              sink_list);
           g_mutex_unlock (&self->sink_list_mu);
-          g_main_loop_quit(loop);
+          g_main_loop_quit (loop);
         }
     }
   else
@@ -437,9 +440,10 @@ static void
 set_dbus_prop_discover (NdDbusManager *self, gboolean enable)
 {
   self->discover = enable;
+  g_autoptr (GVariant) enable_v = g_variant_new_boolean (enable);
   emit_nd_manager_dbus_value_changed (self,
                                       "Enabled",
-                                      g_variant_new_boolean (enable));
+                                      enable_v);
 }
 
 static void
@@ -447,7 +451,8 @@ set_dbus_prop_sink_list (NdDbusManager *self, GPtrArray *sink_list)
 {
   g_mutex_lock (&self->sink_list_mu);
   self->sink_list = sink_list;
-  emit_nd_manager_dbus_value_changed (self, "SinkList", get_sink_list (self));
+  g_autoptr (GVariant) sink_list_v = get_sink_list (self);
+  emit_nd_manager_dbus_value_changed (self, "SinkList", sink_list_v);
   g_mutex_unlock (&self->sink_list_mu);
 }
 
@@ -456,18 +461,20 @@ set_dbus_prop_missing_capabilities (NdDbusManager *self,
                                     GPtrArray *missing_capabilities)
 {
   self->missing_capabilities = missing_capabilities;
+  g_autoptr (GVariant) missing_capabilities_v = get_missing_capabilities (self);
   emit_nd_manager_dbus_value_changed (self,
                                       "MissingCapabilities",
-                                      get_missing_capabilities (self));
+                                      missing_capabilities_v);
 }
 
 static void
 add_dbus_missing_capabilities (NdDbusManager *self, const gchar *capability)
 {
   g_ptr_array_add (self->missing_capabilities, g_strdup (capability));
+  g_autoptr (GVariant) missing_capabilities = get_missing_capabilities (self);
   emit_nd_manager_dbus_value_changed (self,
                                       "MissingCapabilities",
-                                      get_missing_capabilities (self));
+                                      missing_capabilities);
 }
 
 static void
@@ -481,9 +488,12 @@ delete_dbus_missing_capabilities (NdDbusManager *self, const gchar *capability)
         continue;
 
       g_ptr_array_remove_index (self->missing_capabilities, i);
+      g_autoptr (GVariant) missing_capabilities = get_missing_capabilities (self);
+
+      g_debug ("delete_dbus_missing_capabilities");
       emit_nd_manager_dbus_value_changed (self,
                                           "MissingCapabilities",
-                                          get_missing_capabilities (self));
+                                          missing_capabilities);
       break;
     }
 }
@@ -554,7 +564,7 @@ dbus_export (NdDbusManager *self)
   loop = g_main_loop_new (NULL, FALSE);
   g_main_loop_run (loop);
   g_bus_unown_name (owner_id);
-  g_main_loop_unref(loop);
+  g_main_loop_unref (loop);
 }
 
 static void
@@ -580,7 +590,7 @@ emit_object_dbus_value_changed (GDBusConnection *bus,
   GVariantBuilder builder;
   g_variant_builder_init (&builder, G_VARIANT_TYPE_ARRAY);
   g_variant_builder_add (&builder, "{sv}", property_name, property_value);
-
+  D_ND_INFO ("emit property changed:%s", property_name);
   g_autoptr (GError) error = NULL;
   if (!g_dbus_connection_emit_signal (
           bus,

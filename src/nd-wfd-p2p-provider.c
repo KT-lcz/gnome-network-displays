@@ -356,7 +356,6 @@ nd_wfd_p2p_provider_provider_iface_init (NdProviderIface *iface)
 static GList *
 nd_wfd_p2p_provider_provider_get_sinks (NdProvider *provider)
 {
-  g_warning ("call p2p provider get sinks");
   NdWFDP2PProvider *wfd_p2p_provider = ND_WFD_P2P_PROVIDER (provider);
   GList *res = NULL;
 

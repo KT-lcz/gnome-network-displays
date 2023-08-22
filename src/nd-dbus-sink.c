@@ -489,6 +489,8 @@ handle_cancel (NdDbusSink *self)
     }
   if (self->cancellable)
     g_cancellable_cancel (self->cancellable);
+  if (self->portal)
+    g_object_unref (self->portal);
 }
 
 static GstElement *

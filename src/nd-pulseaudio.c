@@ -19,6 +19,9 @@ struct _NdPulseaudio
   guint             null_module_idx;
 
   pa_operation     *operation;
+
+  nd_pa_sink_changed_cb_t sink_changed_cb;
+  void *sink_changed_cb_data;
 };
 
 static void      nd_pulseaudio_async_initable_iface_init (GAsyncInitableIface *iface);
@@ -30,6 +33,10 @@ static void      nd_pulseaudio_async_initable_init_async (GAsyncInitable     *in
 static gboolean nd_pulseaudio_async_initable_init_finish (GAsyncInitable *initable,
                                                           GAsyncResult   *res,
                                                           GError        **error);
+static void nd_pulseaudio_subscribe_cb (pa_context *c,
+                                        pa_subscription_event_type_t t,
+                                        uint32_t idx,
+                                        void *userdata);
 
 G_DEFINE_TYPE_EXTENDED (NdPulseaudio, nd_pulseaudio, G_TYPE_OBJECT, 0,
                         G_IMPLEMENT_INTERFACE (G_TYPE_ASYNC_INITABLE,
@@ -137,6 +144,7 @@ on_pa_nd_sink_got_info (pa_context         *c,
       g_debug ("NdPulseaudio: Error querying sink info");
       g_debug ("NdPulseaudio: Got a sink info for the expected name");
 
+      self->null_module_idx = i->owner_module;
       return_idle_success (self->init_task);
       g_clear_object (&self->init_task);
       return;
@@ -156,6 +164,27 @@ on_pa_nd_sink_got_info (pa_context         *c,
                                             "device.icon_name=\"network-wireless\"",
                                             on_pa_null_module_loaded,
                                             self);
+}
+
+static void
+on_get_server_info (pa_context *c, const pa_server_info *i, void *userdata)
+{
+  g_info ("on_get_server_info changed %s", i->default_sink_name);
+  NdPulseaudio *self = ND_PULSEAUDIO (userdata);
+  if (self->sink_changed_cb != NULL)
+    {
+      self->sink_changed_cb (g_str_equal (ND_PA_SINK, i->default_sink_name), self->sink_changed_cb_data);
+    }
+}
+
+static void
+nd_pulseaudio_subscribe_cb (pa_context *c, pa_subscription_event_type_t t, uint32_t idx, void *userdata)
+{
+  if (t & PA_SUBSCRIPTION_EVENT_CHANGE)
+    {
+      NdPulseaudio *self = ND_PULSEAUDIO (userdata);
+      pa_context_get_server_info (self->context, on_get_server_info, userdata);
+    }
 }
 
 static void
@@ -181,6 +210,14 @@ nd_pulseaudio_state_cb (pa_context *context,
                                                           ND_PA_SINK,
                                                           on_pa_nd_sink_got_info,
                                                           self);
+      pa_context_set_subscribe_callback (self->context,
+                                         nd_pulseaudio_subscribe_cb,
+                                         self);
+      pa_operation *op = pa_context_subscribe (self->context,
+                                               PA_SUBSCRIPTION_MASK_ALL,
+                                               NULL,
+                                               NULL);
+      pa_operation_unref (op);
       break;
 
     case PA_CONTEXT_FAILED:
@@ -323,4 +360,47 @@ nd_pulseaudio_get_source (NdPulseaudio *self)
                 NULL);
 
   return g_steal_pointer (&src);
+}
+
+static void
+on_nd_pa_set_sink_cb (pa_context *c, int success, void *userdata)
+{
+  NdPulseaudio *self = ND_PULSEAUDIO (userdata);
+  if (success)
+    {
+      g_info ("success switch output to virtual output");
+    }
+  else
+    {
+      g_warning ("failed switch output to virtual output");
+    }
+}
+
+void
+nd_pulseaudio_set_sink (NdPulseaudio *self)
+{
+  pa_operation *operation = pa_context_set_default_sink (self->context, ND_PA_SINK, on_nd_pa_set_sink_cb, self);
+  pa_operation_unref (operation);
+}
+
+void
+nd_pulseaudio_sync_state (NdPulseaudio *self)
+{
+  pa_operation *operation = pa_context_get_server_info (self->context, on_get_server_info, self);
+  pa_operation_unref (operation);
+}
+
+// manager注册cb
+void
+nd_pulseaudio_set_sink_changed_cb (NdPulseaudio *self, nd_pa_sink_changed_cb_t cb, void *user_data)
+{
+  self->sink_changed_cb = cb;
+  self->sink_changed_cb_data = user_data;
+}
+
+void
+nd_pulseaudio_unload_module (NdPulseaudio *self, pa_context_success_cb_t cb, void *userdata)
+{
+  pa_operation *operation = pa_context_unload_module (self->context, self->null_module_idx, cb, userdata);
+  pa_operation_unref (operation);
 }

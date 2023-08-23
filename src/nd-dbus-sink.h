@@ -31,4 +31,6 @@ gboolean nd_dbus_sink_equal_sink (NdDbusSink *self,
 gchar *nd_sink_dbus_get_hw_address (NdDbusSink *self);
 gchar *nd_sink_dbus_get_name (NdDbusSink *self);
 
+typedef void (*nd_handle_cancel_cb_t) (void *user_data);
+void nd_sink_dbus_set_cancel_cb (NdDbusSink *self, nd_handle_cancel_cb_t cb, void *user_data);
 G_END_DECLS

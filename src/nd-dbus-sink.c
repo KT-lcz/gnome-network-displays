@@ -30,6 +30,9 @@ struct _NdDbusSink
   guint32 strength;
   gchar *hw_address;
   // 目前nm的机制,peer的属性不会改变,只有创建新的peer会更新属性
+
+  nd_handle_cancel_cb_t nd_handle_cancel_cb;
+  void *nd_handle_cancel_cb_user_data;
 };
 
 enum
@@ -117,6 +120,13 @@ gchar *
 nd_sink_dbus_get_name (NdDbusSink *self)
 {
   return g_strdup (self->name);
+}
+
+void
+nd_sink_dbus_set_cancel_cb (NdDbusSink *self, nd_handle_cancel_cb_t cb, void *user_data)
+{
+  self->nd_handle_cancel_cb = cb;
+  self->nd_handle_cancel_cb_user_data = user_data;
 }
 
 static void
@@ -491,6 +501,10 @@ handle_cancel (NdDbusSink *self)
     g_cancellable_cancel (self->cancellable);
   if (self->portal)
     g_object_unref (self->portal);
+  // TODO
+  //  需要处理音频输出端口 通过callback让manager处理
+  if (self->nd_handle_cancel_cb)
+    self->nd_handle_cancel_cb (self->nd_handle_cancel_cb_user_data);
 }
 
 static GstElement *

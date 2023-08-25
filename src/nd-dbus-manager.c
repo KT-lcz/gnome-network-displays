@@ -11,7 +11,7 @@
 #include "nd-sink.h"
 #include "wfd/wfd-media-factory.h"
 
-static void connect_provider_signal (NdDbusManager *self);
+static void handle_provider_signal (NdDbusManager *self);
 static void gen_node_info_by_xml (NdDbusManager *self);
 static void nd_dbus_pulseaudio_init_async_cb (GObject *source_object,
                                               GAsyncResult *res,
@@ -33,10 +33,15 @@ static void add_dbus_missing_capabilities (NdDbusManager *self,
 static void delete_dbus_missing_capabilities (NdDbusManager *self,
                                               const gchar *capability);
 static GVariant *get_sink_list (NdDbusManager *self);
-
-static void set_dbus_prop_dnd_sink_enabled (NdDbusManager *self, gboolean enable);
+static void set_dbus_prop_dnd_sink_enabled (NdDbusManager *self,
+                                            gboolean enable);
 static void set_deepin_audio_auto_switch (gboolean enable);
 static gboolean get_deepin_audio_auto_switch ();
+static gboolean idle_auto_quit_check (gpointer user_data);
+static void handle_manager_quit (NdDbusManager *self);
+static void nd_pulseaudio_unload_module_cb (pa_context *c,
+                                            int success,
+                                            void *userdata);
 
 static const gchar *no_exist_wireless = "NoExistWireless";
 static const gchar *not_support_P2P = "NotSupportP2P";
@@ -44,6 +49,13 @@ static const gchar *no_video_encoder = "NoVideoEncoder";
 
 static GMainLoop *loop;
 
+#define DEEPIN_ND_DBUS_PATH "/com/deepin/Cooperation/NetworkDisplay"
+#define DEEPIN_ND_DBUS_INTERFACE "com.deepin.Cooperation.NetworkDisplay"
+#define DEEPIN_ND_DBUS_NAME "com.deepin.Cooperation.NetworkDisplay"
+
+static const uint idle_quit_sec = 180;
+
+// gobject 相关操作
 struct _NdDbusManager
 {
   GObject parent_instance;
@@ -51,9 +63,7 @@ struct _NdDbusManager
   GDBusConnection *bus;
   guint reg_id;
 
-  gboolean use_x11;
   gboolean use_dnd_sink;
-  NdScreencastPortal *portal;
   NdPulseaudio *pulse;
   GPtrArray *sink_list;            // nd-dbus-sink对象的数组
   GPtrArray *missing_capabilities; // 字符串数组
@@ -62,12 +72,10 @@ struct _NdDbusManager
   gboolean discover;
   GCancellable *cancellable;
   GMutex sink_list_mu;
+
+  GTimeVal busy_time; // 每次 dbus method 调用会更新该时间
 };
 G_DEFINE_TYPE (NdDbusManager, nd_dbus_manager, G_TYPE_OBJECT)
-
-#define DEEPIN_ND_DBUS_PATH "/com/deepin/Cooperation/NetworkDisplay"
-#define DEEPIN_ND_DBUS_INTERFACE "com.deepin.Cooperation.NetworkDisplay"
-#define DEEPIN_ND_DBUS_NAME "com.deepin.Cooperation.NetworkDisplay"
 
 NdDbusManager *
 nd_dbus_manager_new (void)
@@ -78,14 +86,13 @@ nd_dbus_manager_new (void)
 static void
 nd_dbus_manager_finalize (GObject *object)
 {
-  D_ND_INFO ("ND DBUS MANAGER FINALIZE");
+  D_ND_INFO ("nd dbus manager finalize");
   G_OBJECT_CLASS (nd_dbus_manager_parent_class)->finalize (object);
 
   NdDbusManager *self = ND_DBUS_MANAGER (object);
 
   g_dbus_connection_unregister_object (self->bus, self->reg_id);
   g_dbus_node_info_unref (self->network_display_info);
-  g_clear_object (&self->portal);
   g_clear_object (&self->pulse);
   g_ptr_array_free (self->sink_list, TRUE);
   self->sink_list = NULL;
@@ -111,8 +118,7 @@ nd_dbus_manager_init (NdDbusManager *self)
 {
   NdScreencastPortal *portal = NULL;
   NdPulseaudio *pulse = NULL;
-  self->discover = TRUE; // 调试时默认用TRUE
-  self->use_x11 = TRUE;
+  self->discover = TRUE;                                                // 调试时默认用TRUE
   self->missing_capabilities = g_ptr_array_new_with_free_func (g_free); // 当使用g_ptr_array_free释放指针数组时,会自动调用g_free释放元素的内存
   self->sink_list = g_ptr_array_new_with_free_func (g_object_unref);
   g_mutex_init (&self->sink_list_mu);
@@ -142,7 +148,7 @@ nd_dbus_manager_init (NdDbusManager *self)
   // 开启/关闭扫描
   g_object_set (self->meta_provider, "discover", self->discover, NULL);
   // 监听sink增减,创建对应的dbus-sink
-  connect_provider_signal (self);
+  handle_provider_signal (self);
 
   // 异步初始化pulseaudio
   pulse = nd_pulseaudio_new ();
@@ -151,8 +157,11 @@ nd_dbus_manager_init (NdDbusManager *self)
                                self->cancellable,
                                nd_dbus_pulseaudio_init_async_cb,
                                self);
+  g_get_current_time (&self->busy_time);
+  g_timeout_add_seconds (idle_quit_sec, idle_auto_quit_check, self);
 }
 
+// 处理持有对象的信号和回调
 static void
 on_meta_provider_has_provider_changed_cb (NdDbusManager *self,
                                           GParamSpec *pspec,
@@ -162,15 +171,17 @@ on_meta_provider_has_provider_changed_cb (NdDbusManager *self,
 
   g_object_get (self->meta_provider, "has-providers", &has_providers, NULL);
   const gchar *has = has_providers ? "TRUE" : "FALSE";
-  D_ND_INFO ("has-providers:%s", has);
+  D_ND_INFO ("nd manager has providers:%s", has);
   if (!has_providers)
     add_dbus_missing_capabilities (self, not_support_P2P);
   else
     delete_dbus_missing_capabilities (self, not_support_P2P);
 }
 
+// 响应 pa sink 改变的场景，修改 DndSinkEnabled 属性
 static void
-on_nd_dbus_pulseaudio_sink_changed (gboolean use_dnd_sink, void *user_data)
+on_nd_dbus_pulseaudio_sink_changed (gboolean use_dnd_sink,
+                                    void *user_data)
 {
   NdDbusManager *self = ND_DBUS_MANAGER (user_data);
   set_dbus_prop_dnd_sink_enabled (self, use_dnd_sink);
@@ -195,11 +206,12 @@ nd_dbus_pulseaudio_init_async_cb (GObject *source_object,
   self->pulse = ND_PULSEAUDIO (source_object);
   nd_pulseaudio_set_sink_changed_cb (self->pulse, on_nd_dbus_pulseaudio_sink_changed, self);
   nd_pulseaudio_sync_state (self->pulse);
+  D_ND_INFO ("Nd pulseaudio module init succeed");
 }
 
-// 处理sink取消时
+// 处理 dbus sink 取消时
 static void
-nd_sink_cancel_cb (void *user_data)
+nd_dbus_sink_cancel_cb (void *user_data)
 {
   set_deepin_audio_auto_switch (TRUE);
 }
@@ -231,18 +243,15 @@ sink_added_cb (NdDbusManager *self,
       return;
     }
   g_autoptr (NdDbusSink) dbus_sink = nd_dbus_sink_new (self->meta_provider,
-                                                       self->use_x11,
-                                                       self->portal,
                                                        sink,
                                                        self->bus,
                                                        self->pulse);
-  D_ND_INFO ("not exist this sink ,start add a new sink: %s", nd_sink_dbus_get_hw_address (dbus_sink));
-  nd_sink_dbus_set_cancel_cb (dbus_sink, nd_sink_cancel_cb, self);
+  D_ND_INFO ("not exist this sink ,start add a new sink: %s %s", nd_sink_dbus_get_name (dbus_sink), nd_sink_dbus_get_hw_address (dbus_sink));
+  nd_sink_dbus_set_cancel_cb (dbus_sink, nd_dbus_sink_cancel_cb, self);
   g_ptr_array_add (self->sink_list, g_object_ref (dbus_sink));
   nd_sink_dbus_export (dbus_sink);
-  GVariant *sink_list = get_sink_list (self);
+  emit_nd_manager_dbus_value_changed (self, "SinkList", get_sink_list (self)); // todo build 内存释放问题
   g_mutex_unlock (&self->sink_list_mu);
-  emit_nd_manager_dbus_value_changed (self, "SinkList", sink_list);
 }
 
 static void
@@ -274,19 +283,9 @@ sink_removed_cb (NdDbusManager *self,
 }
 
 static void
-sink_list_free_element (gpointer data, gpointer user_data)
+handle_provider_signal (NdDbusManager *self)
 {
-  // 释放成员内存的函数，可以根据实际情况来实现
-  NdDbusSink *dbus_sink = ND_DBUS_SINK (data);
-  D_ND_INFO ("free sink list element");
-  nd_sink_dbus_stop_export (dbus_sink);
-  g_object_unref (dbus_sink);
-}
-
-static void
-connect_provider_signal (NdDbusManager *self)
-{
-  // 完成 SinkList 的增减;创建对应的 nd-dbus-sink 和 导出对应的 nd-dbus-sink;发送属性改变信号
+  // 完成 SinkList 的增减;创建对应的 nd-dbus-sink 和导出对应的 nd-dbus-sink;发送属性改变信号
   NdProvider *provider = ND_PROVIDER (self->meta_provider);
   g_signal_connect_object (provider,
                            "sink-added",
@@ -300,6 +299,32 @@ connect_provider_signal (NdDbusManager *self)
                            G_CONNECT_SWAPPED);
 }
 
+// 检查服务是否可以退出
+static gboolean
+idle_auto_quit_check (gpointer user_data)
+{
+  NdDbusManager *self = ND_DBUS_MANAGER (user_data);
+  for (gint i = 0; i < self->sink_list->len; i++)
+    {
+      NdDbusSink *sink = (NdDbusSink *) self->sink_list->pdata[i];
+      NdSinkState state = nd_sink_dbus_get_status (sink);
+      if (state != ND_SINK_STATE_DISCONNECTED)
+        {
+          D_ND_INFO ("has busy sink, don't need quit service");
+          return G_SOURCE_CONTINUE;
+        }
+    }
+  GTimeVal current_time;
+  g_get_current_time (&current_time);
+  if ((current_time.tv_sec - self->busy_time.tv_sec) > idle_quit_sec)
+    {
+      D_ND_INFO ("The service is in idle state and can quit.");
+      handle_manager_quit (self);
+      return G_SOURCE_REMOVE;
+    }
+  return G_SOURCE_CONTINUE;
+}
+
 /*
  * dbus操作都在以下代码中，包含：
  * dbus导出
@@ -308,44 +333,19 @@ connect_provider_signal (NdDbusManager *self)
  * dbus属性设置和属性改变信号
  */
 static void
-gen_node_info_by_xml (NdDbusManager *self)
+sink_list_free_element (gpointer data, gpointer user_data)
 {
-  const gchar *network_display_interface = "<node>"
-                                           "  <interface name='com.deepin.Cooperation.NetworkDisplay'>"
-                                           "    <property name='SinkList' type='ao' access='read'/>"
-                                           "    <property name='Enabled' type='b' access='read'/>"
-                                           "    <property name='MissingCapabilities' type='as' access='read'/>"
-                                           "    <property name='DndSinkEnabled' type='b' access='read'/>"
-                                           "    <method name='Refresh'></method>"
-                                           "    <method name='Enable'>"
-                                           "      <arg name='enable' direction='in' type='b'/>"
-                                           "    </method>"
-                                           "    <method name='EnableDndSink'>"
-                                           "      <arg name='enable' direction='in' type='b'/>"
-                                           "    </method>"
-                                           "  </interface>"
-                                           "</node>";
-  self->network_display_info = g_dbus_node_info_new_for_xml (network_display_interface, NULL);
-  g_assert (self->network_display_info != NULL);
+  // 释放成员内存的函数，可以根据实际情况来实现
+  NdDbusSink *dbus_sink = ND_DBUS_SINK (data);
+  D_ND_INFO ("free sink list element");
+  nd_sink_dbus_stop_export (dbus_sink);
+  g_object_unref (dbus_sink);
 }
 
 static void
-on_name_lost (GDBusConnection *connection,
-              const gchar *name,
-              gpointer user_data)
+free_sink_list (NdDbusManager *self)
 {
-  D_ND_WARNING ("com.deepin.Cooperation.NetworkDisplay name lost");
-  exit (1);
-}
-
-static void
-nd_pulseaudio_unload_module_cb (pa_context *c, int success, void *userdata)
-{
-  NdDbusManager *self = ND_DBUS_MANAGER (userdata);
-
-  D_ND_INFO ("unload pa module end, continue quit");
   g_mutex_lock (&self->sink_list_mu);
-
   // 先遍历所有sink停止导出，再重置GPtrArray的内存;
   g_ptr_array_foreach (self->sink_list,
                        sink_list_free_element,
@@ -356,7 +356,37 @@ nd_pulseaudio_unload_module_cb (pa_context *c, int success, void *userdata)
                                       "SinkList",
                                       sink_list);
   g_mutex_unlock (&self->sink_list_mu);
+}
+
+static gboolean
+manager_real_quit (gpointer user_data)
+{
+  D_ND_INFO ("disable dnd, start real quit service");
+  NdDbusManager *self = ND_DBUS_MANAGER (user_data);
+  free_sink_list (self);
   g_main_loop_quit (loop);
+  return G_SOURCE_REMOVE;
+}
+
+static const guint quit_timeout = 25;
+// 进程退出的处理
+static void
+handle_manager_quit (NdDbusManager *self)
+{
+  D_ND_INFO ("disable dnd, start unload pa module");
+  // 退出前需要先卸载pa模块
+  nd_pulseaudio_unload_module (self->pulse, nd_pulseaudio_unload_module_cb, self);
+  // 如果pa响应超时，那么直接退出
+  g_timeout_add_seconds (quit_timeout, manager_real_quit, self);
+}
+
+// pa模块卸载完成后继续其他退出操作
+static void
+nd_pulseaudio_unload_module_cb (pa_context *c, int success, void *userdata)
+{
+  NdDbusManager *self = ND_DBUS_MANAGER (userdata);
+  D_ND_INFO ("unload pa module end, continue quit");
+  manager_real_quit (self);
 }
 
 static gboolean
@@ -369,9 +399,9 @@ get_deepin_audio_auto_switch ()
   g_autoptr (GError) error = NULL;
   gboolean result = g_spawn_command_line_sync (command, &stdout_text, &stderr_text, &exit_status, &error);
   if (error)
-    g_warning ("Failed to run '%s': %s", command, error->message);
+    D_ND_WARNING ("Failed to run '%s': %s", command, error->message);
   else if (exit_status != 0)
-    g_warning ("Failed to run, '%s' returned %d", command, exit_status);
+    D_ND_WARNING ("Failed to run, '%s' returned %d", command, exit_status);
   else if (result)
     {
       g_autofree gchar *res = g_strstrip (stdout_text);
@@ -386,15 +416,16 @@ set_deepin_audio_auto_switch (gboolean enable)
   g_autofree gchar *command = g_strdup_printf ("dde-dconfig --set -a org.deepin.dde.daemon -r org.deepin.dde.daemon.audio -k autoSwitchPort -v %s", auto_string);
   g_autofree gchar *stdout_text = NULL;
   g_autofree gchar *stderr_text = NULL;
-  gint exit_status;
+  gint exit_status = 0;
   g_autoptr (GError) error = NULL;
-  gboolean result = g_spawn_command_line_sync (command, &stdout_text, &stderr_text, &exit_status, &error);
+  g_spawn_command_line_sync (command, &stdout_text, &stderr_text, &exit_status, &error);
   if (error)
-    g_warning ("Failed to run '%s': %s", command, error->message);
+    D_ND_WARNING ("Failed to run '%s': %s", command, error->message);
   else if (exit_status != 0)
-    g_warning ("Failed to run, '%s' returned %d", command, exit_status);
+    D_ND_WARNING ("Failed to run, '%s' returned %d", command, exit_status);
 }
 
+// dbus method 处理
 static void
 handle_manager_method_call (GDBusConnection *connection,
                             const gchar *sender,
@@ -408,11 +439,14 @@ handle_manager_method_call (GDBusConnection *connection,
   // 返回空g_dbus_method_invocation_return_value(invocation, NULL);
   // 返回一个数据g_dbus_method_invocation_return_value(invocation, g_variant_new("(s)", response));
   // 返回一个错误g_dbus_method_invocation_return_error (invocation, G_DBUS_ERROR, G_DBUS_ERROR_FAILED, "Failed to xxx");
+  D_ND_INFO ("Nd dbus manager method call %s:", method_name);
   NdDbusManager *self = user_data;
+  g_get_current_time (&self->busy_time);
   if (g_strcmp0 (method_name, "Refresh") == 0)
     {
       if (self->discover == FALSE)
         {
+          // discover 正常情况应该不会是FALSE
           g_dbus_method_invocation_return_error (
               invocation,
               G_DBUS_ERROR,
@@ -455,9 +489,7 @@ handle_manager_method_call (GDBusConnection *connection,
         }
       else
         {
-          D_ND_INFO ("disable dnd, clear all sinks");
-          // TODO 需要增加超时，防止无法退出
-          nd_pulseaudio_unload_module (self->pulse, nd_pulseaudio_unload_module_cb, self);
+          handle_manager_quit (self);
         }
     }
   else if (g_strcmp0 (method_name, "EnableDndSink") == 0)
@@ -476,14 +508,13 @@ handle_manager_method_call (GDBusConnection *connection,
       if (dnd_sink_enabled)
         {
           set_deepin_audio_auto_switch (FALSE);
-          nd_pulseaudio_set_sink (self->pulse);
+          nd_pulseaudio_set_nd_sink (self->pulse);
         }
       else
         {
           // 开启AutoSwitchPort，将控制权交给dde的audio模块控制
-          // TODO 可能还需要先获取之前的状态，已经监听变化；
+          // TODO 可能还需要先获取之前的状态，以及监听变化；
           set_deepin_audio_auto_switch (TRUE);
-
         }
     }
   else
@@ -497,6 +528,7 @@ handle_manager_method_call (GDBusConnection *connection,
   g_dbus_method_invocation_return_value (invocation, NULL);
 }
 
+// dbus property 相关操作
 static GVariant *
 get_enabled (NdDbusManager *self)
 {
@@ -546,10 +578,9 @@ set_dbus_prop_dnd_sink_enabled (NdDbusManager *self, gboolean enable)
   if (self->use_dnd_sink != enable)
     {
       self->use_dnd_sink = enable;
-      GVariant *enable_v = g_variant_new_boolean (enable);
       emit_nd_manager_dbus_value_changed (self,
                                           "DndSinkEnabled",
-                                          enable_v);
+                                          g_variant_new_boolean (enable));
     }
 }
 
@@ -557,10 +588,9 @@ static void
 set_dbus_prop_discover (NdDbusManager *self, gboolean enable)
 {
   self->discover = enable;
-  GVariant *enable_v = g_variant_new_boolean (enable);
   emit_nd_manager_dbus_value_changed (self,
                                       "Enabled",
-                                      enable_v);
+                                      g_variant_new_boolean (enable));
 }
 
 static void
@@ -568,8 +598,7 @@ set_dbus_prop_sink_list (NdDbusManager *self, GPtrArray *sink_list)
 {
   g_mutex_lock (&self->sink_list_mu);
   self->sink_list = sink_list;
-  GVariant *sink_list_v = get_sink_list (self);
-  emit_nd_manager_dbus_value_changed (self, "SinkList", sink_list_v);
+  emit_nd_manager_dbus_value_changed (self, "SinkList", get_sink_list (self));
   g_mutex_unlock (&self->sink_list_mu);
 }
 
@@ -578,20 +607,18 @@ set_dbus_prop_missing_capabilities (NdDbusManager *self,
                                     GPtrArray *missing_capabilities)
 {
   self->missing_capabilities = missing_capabilities;
-  GVariant *missing_capabilities_v = get_missing_capabilities (self);
   emit_nd_manager_dbus_value_changed (self,
                                       "MissingCapabilities",
-                                      missing_capabilities_v);
+                                      get_missing_capabilities (self));
 }
 
 static void
 add_dbus_missing_capabilities (NdDbusManager *self, const gchar *capability)
 {
   g_ptr_array_add (self->missing_capabilities, g_strdup (capability));
-  GVariant *missing_capabilities = get_missing_capabilities (self);
   emit_nd_manager_dbus_value_changed (self,
                                       "MissingCapabilities",
-                                      missing_capabilities);
+                                      get_missing_capabilities (self));
 }
 
 static void
@@ -605,87 +632,11 @@ delete_dbus_missing_capabilities (NdDbusManager *self, const gchar *capability)
         continue;
 
       g_ptr_array_remove_index (self->missing_capabilities, i);
-      GVariant *missing_capabilities = get_missing_capabilities (self);
-
-      g_debug ("delete_dbus_missing_capabilities");
       emit_nd_manager_dbus_value_changed (self,
                                           "MissingCapabilities",
-                                          missing_capabilities);
+                                          get_missing_capabilities (self));
       break;
     }
-}
-
-static GVariant *
-handle_manager_get_property (GDBusConnection *connection,
-                             const gchar *sender,
-                             const gchar *object_path,
-                             const gchar *interface_name,
-                             const gchar *property_name,
-                             GError **error,
-                             gpointer user_data)
-{
-  NdDbusManager *self = user_data;
-  if (g_strcmp0 (property_name, "SinkList") == 0)
-    {
-      g_mutex_lock (&self->sink_list_mu);
-      GVariant *ret = get_sink_list (self);
-      g_mutex_unlock (&self->sink_list_mu);
-      return ret;
-    }
-  if (g_strcmp0 (property_name, "Enabled") == 0)
-    {
-      return get_enabled (self);
-    }
-  if (g_strcmp0 (property_name, "MissingCapabilities") == 0)
-    {
-      return get_missing_capabilities (self);
-    }
-  if (g_strcmp0 (property_name, "DndSinkEnabled") == 0)
-    {
-      return get_dnd_sink_enabled (self);
-    }
-  return NULL;
-}
-
-static void
-on_bus_acquired (GDBusConnection *connection,
-                 const gchar *name,
-                 gpointer user_data)
-{
-  NdDbusManager *self = user_data;
-  self->bus = g_object_ref (connection);
-  static const GDBusInterfaceVTable network_display_vtable = {
-    handle_manager_method_call,
-    handle_manager_get_property
-  };
-  guint registration_id = g_dbus_connection_register_object (
-      connection,
-      "/com/deepin/Cooperation/NetworkDisplay",
-      self->network_display_info->interfaces[0],
-      &network_display_vtable,
-      user_data, /* user_data */
-      NULL,      /* user_data_free_func */
-      NULL);     /* GError** */
-  g_assert (registration_id > 0);
-  self->reg_id = registration_id;
-}
-
-void
-dbus_export (NdDbusManager *self)
-{
-  guint owner_id = g_bus_own_name (
-      G_BUS_TYPE_SESSION,
-      DEEPIN_ND_DBUS_NAME,
-      G_BUS_NAME_OWNER_FLAGS_NONE,
-      on_bus_acquired,
-      NULL,
-      on_name_lost,
-      self,
-      NULL);
-  loop = g_main_loop_new (NULL, FALSE);
-  g_main_loop_run (loop);
-  g_bus_unown_name (owner_id);
-  g_main_loop_unref (loop);
 }
 
 static void
@@ -724,4 +675,110 @@ emit_object_dbus_value_changed (GDBusConnection *bus,
     {
       D_ND_WARNING ("Failed to emit PropertiesChanged signal: %s", error->message);
     }
+}
+
+static GVariant *
+handle_manager_get_property (GDBusConnection *connection,
+                             const gchar *sender,
+                             const gchar *object_path,
+                             const gchar *interface_name,
+                             const gchar *property_name,
+                             GError **error,
+                             gpointer user_data)
+{
+  NdDbusManager *self = user_data;
+  if (g_strcmp0 (property_name, "SinkList") == 0)
+    {
+      g_mutex_lock (&self->sink_list_mu);
+      GVariant *ret = get_sink_list (self);
+      g_mutex_unlock (&self->sink_list_mu);
+      return ret;
+    }
+  if (g_strcmp0 (property_name, "Enabled") == 0)
+    {
+      return get_enabled (self);
+    }
+  if (g_strcmp0 (property_name, "MissingCapabilities") == 0)
+    {
+      return get_missing_capabilities (self);
+    }
+  if (g_strcmp0 (property_name, "DndSinkEnabled") == 0)
+    {
+      return get_dnd_sink_enabled (self);
+    }
+  return NULL;
+}
+
+// dbus导出操作
+static void
+gen_node_info_by_xml (NdDbusManager *self)
+{
+  const gchar *network_display_interface = "<node>"
+                                           "  <interface name='com.deepin.Cooperation.NetworkDisplay'>"
+                                           "    <property name='SinkList' type='ao' access='read'/>"
+                                           "    <property name='Enabled' type='b' access='read'/>"
+                                           "    <property name='MissingCapabilities' type='as' access='read'/>"
+                                           "    <property name='DndSinkEnabled' type='b' access='read'/>"
+                                           "    <method name='Refresh'></method>"
+                                           "    <method name='Enable'>"
+                                           "      <arg name='enable' direction='in' type='b'/>"
+                                           "    </method>"
+                                           "    <method name='EnableDndSink'>"
+                                           "      <arg name='enable' direction='in' type='b'/>"
+                                           "    </method>"
+                                           "  </interface>"
+                                           "</node>";
+  self->network_display_info = g_dbus_node_info_new_for_xml (network_display_interface, NULL);
+  g_assert (self->network_display_info != NULL);
+}
+
+static void
+on_bus_acquired (GDBusConnection *connection,
+                 const gchar *name,
+                 gpointer user_data)
+{
+  NdDbusManager *self = user_data;
+  self->bus = g_object_ref (connection);
+  static const GDBusInterfaceVTable network_display_vtable = {
+    handle_manager_method_call,
+    handle_manager_get_property
+  };
+  guint registration_id = g_dbus_connection_register_object (
+      connection,
+      "/com/deepin/Cooperation/NetworkDisplay",
+      self->network_display_info->interfaces[0],
+      &network_display_vtable,
+      user_data, /* user_data */
+      NULL,      /* user_data_free_func */
+      NULL);     /* GError** */
+  g_assert (registration_id > 0);
+  self->reg_id = registration_id;
+}
+
+static void
+on_name_lost (GDBusConnection *connection,
+              const gchar *name,
+              gpointer user_data)
+{
+  D_ND_WARNING ("com.deepin.Cooperation.NetworkDisplay name lost, need quit this service");
+  NdDbusManager *self = ND_DBUS_MANAGER (user_data);
+  handle_manager_quit (self);
+}
+
+void
+dbus_export (NdDbusManager *self)
+{
+  guint owner_id = g_bus_own_name (
+      G_BUS_TYPE_SESSION,
+      DEEPIN_ND_DBUS_NAME,
+      G_BUS_NAME_OWNER_FLAGS_NONE,
+      on_bus_acquired,
+      NULL,
+      on_name_lost,
+      self,
+      NULL);
+  loop = g_main_loop_new (NULL, FALSE);
+  g_main_loop_run (loop);
+  g_bus_unown_name (owner_id);
+  g_main_loop_unref (loop);
 }

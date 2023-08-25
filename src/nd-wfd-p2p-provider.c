@@ -199,7 +199,7 @@ discovery_start_stop (NdWFDP2PProvider *provider, NMDeviceState state)
       g_debug ("WFDP2PProvider: Starting P2P discovery.");
       nm_device_wifi_p2p_start_find (NM_DEVICE_WIFI_P2P (provider->nm_device), NULL, NULL, log_start_find_error, NULL);
       if (!provider->p2p_find_source_id)
-        provider->p2p_find_source_id = g_timeout_add_seconds (20, device_restart_find_timeout, provider);
+        provider->p2p_find_source_id = g_timeout_add_seconds (20, device_restart_find_timeout, provider); // TODO 应该不再需求，又前端调用刷新
     }
   else
     {

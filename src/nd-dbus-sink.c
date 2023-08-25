@@ -15,10 +15,10 @@ struct _NdDbusSink
   guint registration_id;
   GCancellable *cancellable;
   gboolean is_portal_init;
-  // 需要在初始化时完成以下变量的初始化
-  GDBusConnection *bus;
   GDBusProxy *notify_proxy;
   GDBusProxy *display_proxy;
+  // 需要在初始化时完成以下变量的初始化
+  GDBusConnection *bus;
   NdMetaProvider *provider;
   NdScreencastPortal *portal;
   NdPulseaudio *pulse;
@@ -94,16 +94,12 @@ static NdSink *stream_sink = NULL; // 目前一定是 p2p sink
 
 NdDbusSink *
 nd_dbus_sink_new (NdMetaProvider *provider,
-                  gboolean x11,
-                  NdScreencastPortal *portal,
                   NdSink *sink,
                   GDBusConnection *bus,
                   NdPulseaudio *pulse)
 {
   return g_object_new (ND_TYPE_DBUS_SINK,
                        "provider", provider,
-                       "x11", x11,
-                       "portal", portal,
                        "sink", sink,
                        "bus", bus,
                        "pulse", pulse,
@@ -127,6 +123,12 @@ nd_sink_dbus_set_cancel_cb (NdDbusSink *self, nd_handle_cancel_cb_t cb, void *us
 {
   self->nd_handle_cancel_cb = cb;
   self->nd_handle_cancel_cb_user_data = user_data;
+}
+
+NdSinkState
+nd_sink_dbus_get_status (NdDbusSink *self)
+{
+  return self->status;
 }
 
 static void
@@ -172,7 +174,7 @@ nd_dbus_sink_get_property (GObject *object, guint prop_id, GValue *value, GParam
 }
 
 static void
-nd_dbus_sink_sync (NdDbusSink *self, GParamSpec *pspec, NdSink *sink)
+nd_dbus_sink_handle_property_changed (NdDbusSink *self, GParamSpec *pspec, NdSink *sink)
 {
   g_autofree gchar *sink_name = NULL;
   g_object_get (self->sink, "display-name", &sink_name, NULL);
@@ -201,7 +203,7 @@ nd_dbus_sink_prop_init (NdDbusSink *self)
 
       g_signal_connect_object (self->sink,
                                "notify",
-                               (GCallback) nd_dbus_sink_sync,
+                               (GCallback) nd_dbus_sink_handle_property_changed,
                                self,
                                G_CONNECT_SWAPPED);
     }
@@ -437,7 +439,7 @@ nd_dbus_screencast_portal_init_async_cb (GObject *source_object,
             {
               D_ND_WARNING ("Screencast portal is unavailable! It is required to select the monitor to stream!");
             }
-          D_ND_WARNING ("XDG_SESSION_TYPE %s", g_getenv ("XDG_SESSION_TYPE"));
+          D_ND_WARNING ("XDG_SESSION_TYPE is: %s", g_getenv ("XDG_SESSION_TYPE"));
           if (error->code == G_IO_ERROR_FAILED && (g_strcmp0 (g_getenv ("XDG_SESSION_TYPE"), "wayland") == 0))
             {
               // 用户取消share的情况下
@@ -501,8 +503,6 @@ handle_cancel (NdDbusSink *self)
     g_cancellable_cancel (self->cancellable);
   if (self->portal)
     g_object_unref (self->portal);
-  // TODO
-  //  需要处理音频输出端口 通过callback让manager处理
   if (self->nd_handle_cancel_cb)
     self->nd_handle_cancel_cb (self->nd_handle_cancel_cb_user_data);
 }
@@ -617,7 +617,7 @@ sink_notify_state_cb (NdDbusSink *self, GParamSpec *pspec, NdSink *sink)
   NdSinkState state = ND_SINK_STATE_DISCONNECTED;
 
   g_object_get (sink, "state", &state, NULL);
-  D_ND_DEBUG ("Got state change notification from streaming sink to state %s", g_enum_to_string (ND_TYPE_SINK_STATE, state));
+  D_ND_INFO ("Got state change notification from streaming sink to state %s", g_enum_to_string (ND_TYPE_SINK_STATE, state));
   set_prop_status (self, state);
   switch (state)
     {
@@ -698,6 +698,7 @@ handle_sink_method_call (GDBusConnection *connection,
   // g_dbus_method_invocation_return_value(invocation, NULL);
   // g_dbus_method_invocation_return_value(invocation, g_variant_new("(s)", response));
   // g_dbus_method_invocation_return_error (invocation, G_DBUS_ERROR, G_DBUS_ERROR_FAILED, "Failed to switch to guest");
+  D_ND_INFO ("Nd dbus sink method call %s:", method_name);
   NdDbusSink *self = user_data;
   if (g_strcmp0 (method_name, "Connect") == 0)
     {
@@ -812,7 +813,6 @@ notify_callback (GObject *source_object,
 static void
 send_notify (NdDbusSink *self, const gchar *body)
 {
-  return;
   GVariant *notification_params = g_variant_new ("(susssasa{sv}i)",
                                                  "Deepin network display",
                                                  0,

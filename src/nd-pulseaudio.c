@@ -377,7 +377,7 @@ on_nd_pa_set_sink_cb (pa_context *c, int success, void *userdata)
 }
 
 void
-nd_pulseaudio_set_sink (NdPulseaudio *self)
+nd_pulseaudio_set_nd_sink (NdPulseaudio *self)
 {
   pa_operation *operation = pa_context_set_default_sink (self->context, ND_PA_SINK, on_nd_pa_set_sink_cb, self);
   pa_operation_unref (operation);

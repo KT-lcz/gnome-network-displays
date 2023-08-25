@@ -19,8 +19,6 @@ G_BEGIN_DECLS
 G_DECLARE_FINAL_TYPE (NdDbusSink, nd_dbus_sink, ND, DBUS_SINK, GObject)
 
 NdDbusSink *nd_dbus_sink_new (NdMetaProvider *meta_provider,
-                              gboolean use_x11,
-                              NdScreencastPortal *portal,
                               NdSink *sink,
                               GDBusConnection *bus,
                               NdPulseaudio *pulse);
@@ -33,4 +31,5 @@ gchar *nd_sink_dbus_get_name (NdDbusSink *self);
 
 typedef void (*nd_handle_cancel_cb_t) (void *user_data);
 void nd_sink_dbus_set_cancel_cb (NdDbusSink *self, nd_handle_cancel_cb_t cb, void *user_data);
+NdSinkState nd_sink_dbus_get_status (NdDbusSink *self);
 G_END_DECLS
